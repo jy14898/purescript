@@ -220,9 +220,10 @@ renameInModule imports (Module modSS coms mn decls exps) =
         <*> updateConstraints ss implies
         <*> pure deps
         <*> pure ds
-  updateDecl bound (TypeInstanceDeclaration sa@(ss, _) ch idx name cs cn ts ds) =
+  -- TODO Check. Almost certainly
+  updateDecl bound (TypeInstanceDeclaration sa@(ss, _) ch idx name frall cs cn ts ds) =
     fmap (bound,) $
-      TypeInstanceDeclaration sa ch idx name
+      TypeInstanceDeclaration sa ch idx name frall
         <$> updateConstraints ss cs
         <*> updateClassName cn ss
         <*> traverse updateTypesEverywhere ts

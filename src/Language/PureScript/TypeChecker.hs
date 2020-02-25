@@ -334,7 +334,8 @@ typeCheckAll moduleName _ = traverse go
         not (M.member qualifiedClassName (typeClasses env))
       addTypeClass qualifiedClassName args implies deps tys
       return d
-  go (d@(TypeInstanceDeclaration (ss, _) ch idx dictName deps className tys body)) =
+  -- TODO Check. Most definitely.
+  go (d@(TypeInstanceDeclaration (ss, _) ch idx dictName _ deps className tys body)) =
     rethrow (addHint (ErrorInInstance className tys) . addHint (positionedError ss)) $ do
       env <- getEnv
       let qualifiedDictName = Qualified (Just moduleName) dictName

@@ -266,6 +266,7 @@ data InstanceHead a = InstanceHead
   { instKeyword :: SourceToken
   , instName :: Name Ident
   , instSep :: SourceToken
+  , instForall :: Maybe (SourceToken, (NonEmpty (TypeVarBinding a)), SourceToken)
   , instConstraints :: Maybe (OneOrDelimited (Constraint a), SourceToken)
   , instClass :: QualifiedName (N.ProperName 'N.ClassName)
   , instTypes :: [Type a]

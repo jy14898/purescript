@@ -481,26 +481,69 @@ convertDeclaration fileName decl = case decl of
       (convertConstraint fileName <$> maybe [] (toList . fst) sup)
       (goFundep <$> maybe [] (toList . snd) fdeps)
       (goSig <$> maybe [] (NE.toList . snd) bd)
+  -- THESE TWO GUYS
+  -- I think if you use explicit forall, you have to name all of them
+  --
+  -- I at least need to call convert type (<$>) on the vars
+  -- BUt it seems we dont check at this point that all the variables are named etc
+  -- Which is fair enough. So kinda combine the constraint and args stuff below
+  -- Also requires TypeInstanceDeclaration defn to be updated
+  --
+  -- Actually, I need to run the TypeForall case on the tuple I constructed
+  -- bindings is the bit we are interested in
+  -- What is the purpose of this? Extending the annotation for the type to before the forall?
+  -- It's a bunch of nested foralls? We already get the range by the start and end
+  -- At minimum I need to convertKind on the ones with the annotation
+  -- I need to do whatever getIdent $ nameValue a does, and store it
+  -- TypeForall _ kw bindings _ ty -> do
+  --   let
+  --     -- varname, kind, type
+  --     mkForAll a b t = do
+  --       let ann' = widenLeft (tokAnn $ nameTok a) $ T.getAnnForType t
+  --       T.ForAll ann' (getIdent $ nameValue a) b t Nothing
+  --     -- first arg is SourceType, second arg is our binding
+  --     k t (TypeVarKinded (Wrapped _ (Labeled a _ b) _)) = mkForAll a (Just (convertKind fileName b)) t
+  --     k t (TypeVarName a) = mkForAll a Nothing t
+  --     -- The existing parser builds variables in reverse order
+  --     -- k is the folding function, go ty is the start, of type SourceType, and bindings are our input (into k)
+  --     ty' = foldl k (go ty) bindings
+  --     ann = widenLeft (tokAnn kw) $ T.getAnnForType ty'
+  --   T.setAnnForType ann ty'
+  --
+  -- 
+  -- Note that T.ForAll takes Kind a, where'as we want SourceKind
+  -- Maybe [(Text, (Maybe SourceKind))]
+  --
+  -- ident $ nameValue a or getIdent $ nameValue a
+  -- ?
+  --
+  -- Was I supposed to use TypeVar and TypeKinded?
+  --
   DeclInstanceChain _ insts -> do
     let
-      instName (Instance (InstanceHead _ a _ _ _ _) _) = ident $ nameValue a
+      instName (Instance (InstanceHead _ a _ _ _ _ _) _) = ident $ nameValue a
       chainId = instName <$> toList insts
-      goInst ix inst@(Instance (InstanceHead _ name _ ctrs cls args) bd) = do
+      goInst ix inst@(Instance (InstanceHead _ name _ frall ctrs cls args) bd) = do
         let ann' = uncurry (sourceAnnCommented fileName) $ instanceRange inst
         AST.TypeInstanceDeclaration ann' chainId ix
           (ident $ nameValue name)
+          -- TODO Check. Also possibly rename to vars?
+          -- frall
+          ((\(_, vars,_) -> goTypeVar <$> vars) <$> frall)
           (convertConstraint fileName <$> maybe [] (toList . fst) ctrs)
           (qualified cls)
           (convertType fileName <$> args)
           (AST.ExplicitInstance $ goInstanceBinding <$> maybe [] (NE.toList . snd) bd)
     uncurry goInst <$> zip [0..] (toList insts)
-  DeclDerive _ _ new (InstanceHead _ name _ ctrs cls args) -> do
+  DeclDerive _ _ new (InstanceHead _ name _ frall ctrs cls args) -> do
     let
       name' = ident $ nameValue name
       instTy
         | isJust new = AST.NewtypeInstance
         | otherwise = AST.DerivedInstance
     pure $ AST.TypeInstanceDeclaration ann [name'] 0 name'
+      -- TODO Check. Also possibly rename to vars?
+      ((\(_, vars,_) -> goTypeVar <$> vars) <$> frall)
       (convertConstraint fileName <$> maybe [] (toList . fst) ctrs)
       (qualified cls)
       (convertType fileName <$> args)

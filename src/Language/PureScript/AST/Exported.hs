@@ -100,8 +100,11 @@ filterInstances mn (Just exps) =
 -- |
 -- Get all type and type class names referenced by a type instance declaration.
 --
+-- TODO: Check. I think I also need to get the types referenced in the forall too, as they could add extract ones which arent used?
+--       Tbh that's a good point, will there be actual differences now that you can have a 'loose' variable?
+--       I'm not sure if it will actually make a difference here
 typeInstanceConstituents :: Declaration -> [Either (Qualified (ProperName 'ClassName)) (Qualified (ProperName 'TypeName))]
-typeInstanceConstituents (TypeInstanceDeclaration _ _ _ _ constraints className tys _) =
+typeInstanceConstituents (TypeInstanceDeclaration _ _ _ _ _ constraints className tys _) =
   Left className : (concatMap fromConstraint constraints ++ concatMap fromType tys)
   where
 

@@ -711,11 +711,20 @@ fundep :: { ClassFundep }
 classMember :: { Labeled (Name Ident) (Type ()) }
   : ident '::' type {% checkNoWildcards $3 *> pure (Labeled $1 $2 $3) }
 
+-- OPERATINGHERE
+-- forall many(typeVarBinding) '.' type1 { TypeForall () $1 $2 $3 $4 }
+-- note that if you insert something, oyu have to change the $ guys that come after
+-- also note that now we need 4 versions of this
+-- I have no idea if the order is important
 instHead :: { InstanceHead () }
-  : 'instance' ident '::' constraints '=>' qualProperName manyOrEmpty(typeAtom)
-      { InstanceHead $1 $2 $3 (Just ($4, $5)) $6 $7 }
+  : 'instance' ident '::' forall many(typeVarBinding) '.' constraints '=>' qualProperName manyOrEmpty(typeAtom)
+      { InstanceHead $1 $2 $3 (Just ($4, $5, $6)) (Just ($7, $8)) $9 $10 }
+  | 'instance' ident '::' forall many(typeVarBinding) '.' qualProperName manyOrEmpty(typeAtom)
+      { InstanceHead $1 $2 $3 (Just ($4, $5, $6)) Nothing $7 $8 }
+  | 'instance' ident '::' constraints '=>' qualProperName manyOrEmpty(typeAtom)
+      { InstanceHead $1 $2 $3 Nothing (Just ($4, $5)) $6 $7 }
   | 'instance' ident '::' qualProperName manyOrEmpty(typeAtom)
-      { InstanceHead $1 $2 $3 Nothing $4 $5 }
+      { InstanceHead $1 $2 $3 Nothing Nothing $4 $5 }
 
 constraints :: { OneOrDelimited (Constraint ()) }
   : constraint { One $1 }
