@@ -337,7 +337,7 @@ constraintFromJSON defaultAnn annFromJSON = A.withObject "Constraint" $ \o -> do
   constraintKindArgs <- o .:? "constraintKindArgs" .!= [] >>= traverse (typeFromJSON defaultAnn annFromJSON)
   constraintArgs  <- o .: "constraintArgs" >>= traverse (typeFromJSON defaultAnn annFromJSON)
   constraintData  <- o .: "constraintData" >>= traverse constraintDataFromJSON
-  constraintMultiplicity  <- o .: "constraintMultiplicity"
+  constraintMultiplicity  <- o .:? "constraintMultiplicity" .!= Unlimited
   pure $ Constraint {..}
 
 typeFromJSON :: forall a. A.Parser a -> (A.Value -> A.Parser a) -> A.Value -> A.Parser (Type a)

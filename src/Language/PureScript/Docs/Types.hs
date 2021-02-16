@@ -688,7 +688,7 @@ asConstraint = P.Constraint () <$> key "constraintClass" asQualifiedProperName
                                <*> keyOrDefault "constraintKindArgs" [] (eachInArray asType)
                                <*> key "constraintArgs" (eachInArray asType)
                                <*> pure Nothing
-                               <*> key "constraintMultiplicity" asMultiplicity
+                               <*> keyOrDefault "constraintMultiplicity" P.Unlimited asMultiplicity
 
 parseMultiplicity :: String -> Maybe P.Multiplicity
 parseMultiplicity str = case str of
