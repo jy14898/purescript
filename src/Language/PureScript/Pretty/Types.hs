@@ -47,6 +47,7 @@ data PrettyPrintType
   | PPTypeApp PrettyPrintType PrettyPrintType
   | PPKindArg PrettyPrintType
   | PPConstrainedType PrettyPrintConstraint PrettyPrintType
+  | PPErasedConstrainedType PrettyPrintConstraint PrettyPrintType
   | PPKindedType PrettyPrintType PrettyPrintType
   | PPBinaryNoParensType PrettyPrintType PrettyPrintType PrettyPrintType
   | PPParensInType PrettyPrintType
@@ -73,7 +74,8 @@ convertPrettyPrintType = go
   -- prior  constructors can all be printed simply so it's not really helpful to
   -- truncate them.
   go d _ | d < 0 = PPTruncated
-  go d (ConstrainedType _ (Constraint _ cls kargs args _) ty) = PPConstrainedType (cls, go (d-1) <$> kargs, go (d-1) <$> args) (go d ty)
+  go d (ConstrainedType _ (Constraint _ cls kargs args _ Unlimited) ty) = PPConstrainedType (cls, go (d-1) <$> kargs, go (d-1) <$> args) (go d ty)
+  go d (ConstrainedType _ (Constraint _ cls kargs args _ Never) ty) = PPErasedConstrainedType (cls, go (d-1) <$> kargs, go (d-1) <$> args) (go d ty)
   go d (KindedType _ ty k) = PPKindedType (go (d-1) ty) (go (d-1) k)
   go d (BinaryNoParensType _ ty1 ty2 ty3) = PPBinaryNoParensType (go (d-1) ty1) (go (d-1) ty2) (go (d-1) ty3)
   go d (ParensInType _ ty) = PPParensInType (go (d-1) ty)
@@ -107,6 +109,10 @@ constraintsAsBox tro con ty =
     constraintAsBox con `before` (" " <> text doubleRightArrow <> " " <> ty)
   where
     doubleRightArrow = if troUnicode tro then "⇒" else "=>"
+
+erasedConstraintsAsBox :: PrettyPrintConstraint -> Box -> Box
+erasedConstraintsAsBox con ty =
+    constraintAsBox con `before` (" " <> text "?" <> " " <> ty)
 
 constraintAsBox :: PrettyPrintConstraint -> Box
 constraintAsBox (pn, ks, tys) = typeAsBox' (foldl PPTypeApp (foldl (\a b -> PPTypeApp a (PPKindArg b)) (PPTypeConstructor (fmap coerceProperName pn)) ks) tys)
@@ -168,6 +174,12 @@ constrained = mkPattern match
   match (PPConstrainedType deps ty) = Just (deps, ty)
   match _ = Nothing
 
+erasedConstrained :: Pattern () PrettyPrintType (PrettyPrintConstraint, PrettyPrintType)
+erasedConstrained = mkPattern match
+  where
+  match (PPErasedConstrainedType deps ty) = Just (deps, ty)
+  match _ = Nothing
+
 explicitParens :: Pattern () PrettyPrintType ((), PrettyPrintType)
 explicitParens = mkPattern match
   where
@@ -206,6 +218,7 @@ matchType tro = buildPrettyPrinter operators (matchTypeAtom tro) where
                   , [ AssocL typeApp $ \f x -> keepSingleLinesOr (moveRight 2) f x ]
                   , [ AssocR appliedFunction $ \arg ret -> keepSingleLinesOr id arg (text rightArrow <> " " <> ret) ]
                   , [ Wrap constrained $ \deps ty -> constraintsAsBox tro deps ty ]
+                  , [ Wrap erasedConstrained $ \deps ty -> erasedConstraintsAsBox deps ty ]
                   , [ Wrap forall_ $ \idents ty -> keepSingleLinesOr (moveRight 2) (hsep 1 top (text forall' : fmap printMbKindedType idents) <> text ".") ty ]
                   , [ Wrap kinded $ \ty k -> keepSingleLinesOr (moveRight 2) (typeAsBox' ty) (text (doubleColon ++ " ") <> k) ]
                   , [ Wrap explicitParens $ \_ ty -> ty ]

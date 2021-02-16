@@ -97,12 +97,18 @@ subsumes' mode ty1 (KindedType _ ty2 _) =
   subsumes' mode ty1 ty2
 -- Only check subsumption for constrained types when elaborating.
 -- Otherwise fall back to unification.
-subsumes' SElaborate (ConstrainedType _ con ty1) ty2 = do
+subsumes' SElaborate (ConstrainedType _ con@(Constraint _ _ _ _ _ Unlimited) ty1) ty2 = do
   dicts <- getTypeClassDictionaries
   hints <- getHints
   elaborate <- subsumes' SElaborate ty1 ty2
   let addDicts val = App val (TypeClassDictionary con dicts hints)
   return (elaborate . addDicts)
+subsumes' SElaborate (ConstrainedType _ con@(Constraint _ _ _ _ _ Never) ty1) ty2 = do
+  dicts <- getTypeClassDictionaries
+  hints <- getHints
+  elaborate <- subsumes' SElaborate ty1 ty2
+  let dontAddDicts val = ErasedConstraint val con dicts hints
+  return (elaborate . dontAddDicts)
 subsumes' mode (TypeApp _ f1 r1) (TypeApp _ f2 r2) | eqType f1 tyRecord && eqType f2 tyRecord = do
     let (common, ((ts1', r1'), (ts2', r2'))) = alignRowsWith (subsumes' SNoElaborate) r1 r2
     -- For { ts1 | r1 } to subsume { ts2 | r2 } when r1 is empty (= we're working with a closed row),

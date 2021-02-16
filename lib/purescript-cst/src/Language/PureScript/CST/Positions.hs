@@ -37,6 +37,7 @@ tokenDelta = \case
   TokRightArrow Unicode    -> (0, 1)
   TokRightFatArrow ASCII   -> (0, 2)
   TokRightFatArrow Unicode -> (0, 1)
+  TokErased                -> (0, 1)
   TokDoubleColon ASCII     -> (0, 2)
   TokDoubleColon Unicode   -> (0, 1)
   TokForall ASCII          -> (0, 6)
@@ -264,7 +265,7 @@ typeRange = \case
 
 constraintRange :: Constraint a -> TokenRange
 constraintRange = \case
-  Constraint _ name args
+  Constraint _ name _ args
     | [] <- args -> qualRange name
     | otherwise -> (qualTok name, snd . typeRange $ last args)
   ConstraintParens _ wrp -> wrappedRange wrp

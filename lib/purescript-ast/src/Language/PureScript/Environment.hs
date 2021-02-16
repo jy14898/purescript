@@ -42,7 +42,10 @@ data Environment = Environment
   -- in the `types` field.
   , typeSynonyms :: M.Map (Qualified (ProperName 'TypeName)) ([(Text, Maybe SourceType)], SourceType)
   -- ^ Type synonyms currently in scope
-  , typeClassDictionaries :: M.Map (Maybe ModuleName) (M.Map (Qualified (ProperName 'ClassName)) (M.Map (Qualified Ident) (NEL.NonEmpty NamedDict)))
+  --
+  -- As well as being NamedDict', do I need to make Qualified Ident a Maybe too? do they always sync up?
+  -- Or maybe only that? I'm not sure what the Identifiers represent, the name of the actual instance, or the name of a variable which points to it in the current scope?
+  , typeClassDictionaries :: M.Map (Maybe ModuleName) (M.Map (Qualified (ProperName 'ClassName)) (M.Map (Qualified (Maybe Ident)) (NEL.NonEmpty NamedDict')))
   -- ^ Available type class dictionaries. When looking up 'Nothing' in the
   -- outer map, this returns the map of type class dictionaries in local
   -- scope (ie dictionaries brought in by a constrained type).

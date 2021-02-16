@@ -352,6 +352,7 @@ data PackageError
   | InvalidKind Text
   | InvalidDataDeclType Text
   | InvalidTime
+  | InvalidMultiplicity
   deriving (Show, Eq, Ord, Generic)
 
 instance NFData PackageError
@@ -536,6 +537,8 @@ displayPackageError e = case e of
     "Invalid data declaration type: \"" <> str <> "\""
   InvalidTime ->
     "Invalid time"
+  InvalidMultiplicity ->
+    "Invalid multiplicity"
 
 instance A.FromJSON a => A.FromJSON (Package a) where
   parseJSON = toAesonParser displayPackageError
@@ -685,6 +688,16 @@ asConstraint = P.Constraint () <$> key "constraintClass" asQualifiedProperName
                                <*> keyOrDefault "constraintKindArgs" [] (eachInArray asType)
                                <*> key "constraintArgs" (eachInArray asType)
                                <*> pure Nothing
+                               <*> key "constraintMultiplicity" asMultiplicity
+
+parseMultiplicity :: String -> Maybe P.Multiplicity
+parseMultiplicity str = case str of
+  "Unlimited"  -> Just P.Unlimited
+  "Never" -> Just P.Never
+  _        -> Nothing
+
+asMultiplicity :: Parse PackageError P.Multiplicity
+asMultiplicity = withString (maybe (Left InvalidMultiplicity) Right . parseMultiplicity)
 
 asQualifiedProperName :: Parse e (P.Qualified (P.ProperName a))
 asQualifiedProperName = fromAesonParser

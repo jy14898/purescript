@@ -79,6 +79,7 @@ import Language.PureScript.PSString (PSString)
   '->'               { SourceToken _ (TokRightArrow _) }
   '<='               { SourceToken _ (TokOperator [] sym) | isLeftFatArrow sym }
   '=>'               { SourceToken _ (TokRightFatArrow _) }
+  '?'                { SourceToken _ TokErased }
   ':'                { SourceToken _ (TokOperator [] ":") }
   '::'               { SourceToken _ (TokDoubleColon _) }
   '='                { SourceToken _ TokEquals }
@@ -298,10 +299,12 @@ type1 :: { Type () }
   : type2 { $1 }
   | forall many(typeVarBinding) '.' type1 { TypeForall () $1 $2 $3 $4 }
 
+-- TODO Add multiplicity parameter
 type2 :: { Type () }
   : type3 { $1 }
   | type3 '->' type1 { TypeArr () $1 $2 $3 }
   | type3 '=>' type1 {% do cs <- toConstraint $1; pure $ TypeConstrained () cs $2 $3 }
+  | type3 '?' type1 {% do cs <- toErasedConstraint $1; pure $ TypeConstrained () cs $2 $3 }
 
 type3 :: { Type () }
   : type4 { $1 }
@@ -746,7 +749,7 @@ constraints :: { OneOrDelimited (Constraint ()) }
   | '(' sep(constraint, ',') ')' { Many (Wrapped $1 $2 $3) }
 
 constraint :: { Constraint () }
-  : qualProperName manyOrEmpty(typeAtom) {% for_ $2 checkNoWildcards *> for_ $2 checkNoForalls *> pure (Constraint () (getQualifiedProperName $1) $2) }
+  : qualProperName manyOrEmpty(typeAtom) {% for_ $2 checkNoWildcards *> for_ $2 checkNoForalls *> pure (Constraint () (getQualifiedProperName $1) Unlimited $2) }
   | '(' constraint ')' { ConstraintParens () (Wrapped $1 $2 $3) }
 
 instBinding :: { InstanceBinding () }

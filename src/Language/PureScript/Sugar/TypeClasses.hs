@@ -98,7 +98,7 @@ desugarModule syns kinds (Module ss coms name decls (Just exps)) = do
   superClassesNames _ = []
 
   constraintName :: SourceConstraint -> Qualified (ProperName 'ClassName)
-  constraintName (Constraint _ cName _ _ _) = cName
+  constraintName (Constraint _ cName _ _ _ _) = cName
 
   classDeclName :: Declaration -> Qualified (ProperName 'ClassName)
   classDeclName (TypeClassDeclaration _ pn _ _ _ _) = Qualified (Just name) pn
@@ -272,7 +272,7 @@ typeClassDictionaryDeclaration
 typeClassDictionaryDeclaration sa name args implies members =
   let superclassTypes = superClassDictionaryNames implies `zip`
         [ function unit (foldl srcTypeApp (srcTypeConstructor (fmap (coerceProperName . dictSynonymName) superclass)) tyArgs)
-        | (Constraint _ superclass _ tyArgs _) <- implies
+        | (Constraint _ superclass _ tyArgs _ _) <- implies
         ]
       members' = map (first runIdent . memberToNameAndType) members
       mtys = members' ++ superclassTypes
@@ -290,7 +290,7 @@ typeClassMemberToDictionaryAccessor mn name args (TypeDeclaration (TypeDeclarati
   in ValueDecl sa ident Private [] $
     [MkUnguarded (
      TypedValue False (TypeClassDictionaryAccessor className ident) $
-       moveQuantifiersToFront (quantify (srcConstrainedType (srcConstraint className [] (map (srcTypeVar . fst) args) Nothing) ty))
+       moveQuantifiersToFront (quantify (srcConstrainedType (srcConstraint className [] (map (srcTypeVar . fst) args) Nothing Unlimited) ty))
     )]
 typeClassMemberToDictionaryAccessor _ _ _ _ = internalError "Invalid declaration in type class definition"
 
@@ -334,7 +334,10 @@ typeInstanceDictionaryDeclaration syns kinds sa@(ss, _) name mn deps className t
       -- The type is a record type, but depending on type instance dependencies, may be constrained.
       -- The dictionary itself is a record literal.
       tys' <- traverse (replaceAllTypeSynonymsM syns kinds) tys
-      superclassesDicts <- for typeClassSuperclasses $ \(Constraint _ superclass _ suTyArgs _) -> do
+
+      -- Potentially superclasses might not have a dict
+      -- For now ignore, I'm not sure if it needs to be handled here, but the syntax doesn't support it anyway
+      superclassesDicts <- for typeClassSuperclasses $ \(Constraint _ superclass _ suTyArgs _ _) -> do
         suTyArgs' <- traverse (replaceAllTypeSynonymsM syns kinds) suTyArgs
         let tyArgs = map (replaceAllTypeVars (zip (map fst typeClassArguments) tys')) suTyArgs'
         pure $ Abs (VarBinder ss UnusedIdent) (DeferredDictionary superclass tyArgs)
@@ -366,5 +369,5 @@ typeClassMemberName = fromMaybe (internalError "typeClassMemberName: Invalid dec
 superClassDictionaryNames :: [Constraint a] -> [Text]
 superClassDictionaryNames supers =
   [ superclassName pn index
-  | (index, Constraint _ pn _ _ _) <- zip [0..] supers
+  | (index, Constraint _ pn _ _ _ _) <- zip [0..] supers
   ]

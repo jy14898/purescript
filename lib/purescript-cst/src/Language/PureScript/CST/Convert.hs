@@ -193,9 +193,12 @@ convertConstraint :: String -> Constraint a -> T.SourceConstraint
 convertConstraint fileName = go
   where
   go = \case
-    cst@(Constraint _ name args) -> do
+    cst@(Constraint _ name multiplicity args) -> do
       let ann = uncurry (sourceAnnCommented fileName) $ constraintRange cst
-      T.Constraint ann (qualified name) [] (convertType fileName <$> args) Nothing
+      let mul = case multiplicity of
+            Never -> T.Never
+            Unlimited -> T.Unlimited
+      T.Constraint ann (qualified name) [] (convertType fileName <$> args) Nothing mul
     ConstraintParens _ (Wrapped _ c _) -> go c
 
 convertGuarded :: String -> Guarded a -> [AST.GuardedExpr]

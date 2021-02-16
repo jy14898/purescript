@@ -310,5 +310,5 @@ flattenTypeVarBinding = \case
 
 flattenConstraint :: Constraint a -> DList SourceToken
 flattenConstraint = \case
-  Constraint _ a b -> pure (qualTok a) <> foldMap flattenType b
+  Constraint _ a _ b -> pure (qualTok a) <> foldMap flattenType b
   ConstraintParens _ a -> flattenWrapped flattenConstraint a

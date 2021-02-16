@@ -35,6 +35,7 @@ everythingOnTypes op k = goTy
     Row (Just lbls) Nothing -> k ty `op` everythingOnSeparated op (goTy . lblValue) lbls
     Row (Just lbls) (Just (_, ty2)) -> k ty `op` (everythingOnSeparated op (goTy . lblValue) lbls `op` goTy ty2)
 
+  -- For now, don't make the Multiplicity first class (as a type)
   constraintTys = \case
-    Constraint _ _ tys -> tys
+    Constraint _ _ _ tys -> tys
     ConstraintParens _ (Wrapped _ c _) -> constraintTys c

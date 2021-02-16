@@ -235,6 +235,7 @@ token = peek >>= maybe (pure TokEof) k0
     '←'  -> next *> orOperator1 (TokLeftArrow Unicode) ch1
     '→'  -> next *> orOperator1 (TokRightArrow Unicode) ch1
     '⇒'  -> next *> orOperator1 (TokRightFatArrow Unicode) ch1
+    -- '?'  -> next *> 
     '∀'  -> next *> orOperator1 (TokForall Unicode) ch1
     '|'  -> next *> orOperator1 TokPipe ch1
     '.'  -> next *> orOperator1 TokDot ch1
@@ -243,7 +244,8 @@ token = peek >>= maybe (pure TokEof) k0
     '-'  -> next *> orOperator2 (TokRightArrow ASCII) ch1 '>'
     '='  -> next *> orOperator2' TokEquals (TokRightFatArrow ASCII) ch1 '>'
     ':'  -> next *> orOperator2' (TokOperator [] ":") (TokDoubleColon ASCII) ch1 ':'
-    '?'  -> next *> hole
+    -- Remove holes for now
+    '?'  -> next *> hole ch1
     '\'' -> next *> char
     '"'  -> next *> string
     _  | Char.isDigit ch1 -> restore (== ErrNumberOutOfRange) (next *> number ch1)
@@ -396,11 +398,11 @@ token = peek >>= maybe (pure TokEof) k0
     hole
       : '?' identChar+
   -}
-  hole :: Lexer Token
-  hole = do
+  hole :: Char -> Lexer Token
+  hole ch1 = do
     name <- nextWhile isIdentChar
     if Text.null name
-      then operator [] ['?']
+      then orOperator1 TokErased ch1
       else pure $ TokHole name
 
   {-

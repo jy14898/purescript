@@ -95,8 +95,9 @@ renderChildDeclaration ChildDeclaration{..} =
       , renderType ty
       ]
 
+-- FOr now ignore multiplicity
 renderConstraint :: Constraint' -> RenderedCode
-renderConstraint (P.Constraint ann pn kinds tys _) =
+renderConstraint (P.Constraint ann pn kinds tys _ _) =
   renderType $ foldl (P.TypeApp ann) (foldl (P.KindApp ann) (P.TypeConstructor ann (fmap P.coerceProperName pn)) kinds) tys
 
 renderConstraints :: [Constraint'] -> Maybe RenderedCode

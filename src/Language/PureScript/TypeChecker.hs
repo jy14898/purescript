@@ -202,7 +202,7 @@ addTypeClass _ qualifiedClassName args implies dependencies ds kind = do
 addTypeClassDictionaries
   :: (MonadState CheckState m)
   => Maybe ModuleName
-  -> M.Map (Qualified (ProperName 'ClassName)) (M.Map (Qualified Ident) (NEL.NonEmpty NamedDict))
+  -> M.Map (Qualified (ProperName 'ClassName)) (M.Map (Qualified (Maybe Ident)) (NEL.NonEmpty NamedDict'))
   -> m ()
 addTypeClassDictionaries mn entries =
   modify $ \st -> st { checkEnv = (checkEnv st) { typeClassDictionaries = insertState st } }
@@ -406,7 +406,7 @@ typeCheckAll moduleName _ = traverse go
       let qualifiedDictName = Qualified (Just moduleName) dictName
       flip (traverse_ . traverse_) (typeClassDictionaries env) $ \dictionaries ->
         guardWith (errorMessage (DuplicateInstance dictName ss)) $
-          not (M.member qualifiedDictName dictionaries)
+          not (M.member (Just <$> qualifiedDictName) dictionaries)
       case M.lookup className (typeClasses env) of
         Nothing -> internalError "typeCheckAll: Encountered unknown type class in instance declaration"
         Just typeClass -> do
@@ -421,7 +421,7 @@ typeCheckAll moduleName _ = traverse go
           _ <- traverseTypeInstanceBody checkInstanceMembers body
           deps'' <- (traverse . overConstraintArgs . traverse) replaceAllTypeSynonyms deps'
           let dict = TypeClassDictionaryInScope qualifiedChain idx qualifiedDictName [] className vars kinds' tys'' (Just deps'')
-          addTypeClassDictionaries (Just moduleName) . M.singleton className $ M.singleton (tcdValue dict) (pure dict)
+          addTypeClassDictionaries (Just moduleName) . M.singleton className $ M.singleton (Just <$> tcdValue dict) (pure $ (fmap (fmap Just)) dict)
           return d
 
   checkInstanceArity :: Ident -> Qualified (ProperName 'ClassName) -> TypeClassData -> [SourceType] -> m ()
@@ -511,7 +511,8 @@ typeCheckAll moduleName _ = traverse go
           else throwError . errorMessage $
                 OverlappingInstances className
                                       tys'
-                                      [ident, Qualified (Just moduleName) dictName]
+                                      -- I think this is okay
+                                      [fromJust <$> ident, Qualified (Just moduleName) dictName]
 
   instancesAreApart
     :: S.Set (S.Set Int)

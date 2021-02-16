@@ -176,11 +176,11 @@ applyExternsFileToEnvironment ExternsFile{..} = flip (foldl' applyDecl) efDeclar
   applyDecl env (EDInstance className ident vars kinds tys cs ch idx) =
     env { typeClassDictionaries =
             updateMap
-              (updateMap (M.insertWith (<>) (qual ident) (pure dict)) className)
+              (updateMap (M.insertWith (<>) (qual (Just ident)) (pure dict)) className)
               (Just efModuleName) (typeClassDictionaries env) }
     where
-    dict :: NamedDict
-    dict = TypeClassDictionaryInScope ch idx (qual ident) [] className vars kinds tys cs
+    dict :: NamedDict'
+    dict = TypeClassDictionaryInScope ch idx (qual (Just ident)) [] className vars kinds tys cs
 
     updateMap :: (Ord k, Monoid a) => (a -> a) -> k -> M.Map k a -> M.Map k a
     updateMap f = M.alter (Just . f . fold)
@@ -250,7 +250,7 @@ moduleToExternsFile (Module ss _ mn ds (Just exps)) env = ExternsFile{..}
     = [ EDInstance tcdClassName ident tcdForAll tcdInstanceKinds tcdInstanceTypes tcdDependencies tcdChain tcdIndex
       | m1 <- maybeToList (M.lookup (Just mn) (typeClassDictionaries env))
       , m2 <- M.elems m1
-      , nel <- maybeToList (M.lookup (Qualified (Just mn) ident) m2)
+      , nel <- maybeToList (M.lookup (Qualified (Just mn) (Just ident)) m2)
       , TypeClassDictionaryInScope{..} <- NEL.toList nel
       ]
   toExternsDeclaration _ = []

@@ -160,6 +160,26 @@ data ConstraintData
 instance NFData ConstraintData
 instance Serialise ConstraintData
 
+data Multiplicity
+  = Never
+  | Unlimited
+  deriving (Show, Eq, Ord, Generic)
+
+instance Semigroup Multiplicity where
+  (<>) _ Never = Never
+  (<>) Never _ = Never
+  (<>) Unlimited a = a
+
+instance Monoid Multiplicity where
+  mempty = Unlimited
+
+onUnlimited :: a -> Multiplicity -> Maybe a
+onUnlimited _ Never = Nothing
+onUnlimited a Unlimited = Just a
+
+instance NFData Multiplicity
+instance Serialise Multiplicity
+
 -- | A typeclass constraint
 data Constraint a = Constraint
   { constraintAnn :: a
@@ -172,13 +192,17 @@ data Constraint a = Constraint
   -- ^ type arguments
   , constraintData  :: Maybe ConstraintData
   -- ^ additional data relevant to this constraint
+  , constraintMultiplicity :: Multiplicity
   } deriving (Show, Generic, Functor, Foldable, Traversable)
 
 instance NFData a => NFData (Constraint a)
 instance Serialise a => Serialise (Constraint a)
 
-srcConstraint :: Qualified (ProperName 'ClassName) -> [SourceType] -> [SourceType] -> Maybe ConstraintData -> SourceConstraint
+-- Default to Unlimited for now
+srcConstraint :: Qualified (ProperName 'ClassName) -> [SourceType] -> [SourceType] -> Maybe ConstraintData -> Multiplicity -> SourceConstraint
 srcConstraint = Constraint NullSourceAnn
+--srcConstraint :: Qualified (ProperName 'ClassName) -> [SourceType] -> [SourceType] -> Maybe ConstraintData -> SourceConstraint
+--srcConstraint a b c d = Constraint NullSourceAnn a b c d Unlimited
 
 mapConstraintArgs :: ([Type a] -> [Type a]) -> Constraint a -> Constraint a
 mapConstraintArgs f c = c { constraintArgs = f (constraintArgs c) }
@@ -204,6 +228,11 @@ overConstraintArgsAll f c =
     <$> f (constraintKindArgs c)
     <*> f (constraintArgs c)
 
+multiplicityToJSON :: Multiplicity -> A.Value
+multiplicityToJSON = \case
+  Never -> "Never"
+  Unlimited -> "Unlimited"
+
 constraintDataToJSON :: ConstraintData -> A.Value
 constraintDataToJSON (PartialConstraintData bs trunc) =
   A.object
@@ -218,6 +247,7 @@ constraintToJSON annToJSON (Constraint {..}) =
     , "constraintKindArgs"  .= fmap (typeToJSON annToJSON) constraintKindArgs
     , "constraintArgs"  .= fmap (typeToJSON annToJSON) constraintArgs
     , "constraintData"  .= fmap constraintDataToJSON constraintData
+    , "constraintMultiplicity" .= constraintMultiplicity
     ]
 
 typeToJSON :: forall a. (a -> A.Value) -> Type a -> A.Value
@@ -285,6 +315,16 @@ instance A.ToJSON a => A.ToJSON (Constraint a) where
 instance A.ToJSON ConstraintData where
   toJSON = constraintDataToJSON
 
+instance A.ToJSON Multiplicity where
+  toJSON = multiplicityToJSON
+
+multiplicityFromJSON :: A.Value -> A.Parser Multiplicity
+multiplicityFromJSON = A.withText "Multiplicity" $ \s -> case T.unpack s of
+    "Never" -> pure Never
+    "Unlimited" -> pure Unlimited
+    other ->
+      fail $ "Unrecognised multiplicity: " ++ other
+
 constraintDataFromJSON :: A.Value -> A.Parser ConstraintData
 constraintDataFromJSON = A.withObject "PartialConstraintData" $ \o -> do
   (bs, trunc) <- o .: "contents"
@@ -297,6 +337,7 @@ constraintFromJSON defaultAnn annFromJSON = A.withObject "Constraint" $ \o -> do
   constraintKindArgs <- o .:? "constraintKindArgs" .!= [] >>= traverse (typeFromJSON defaultAnn annFromJSON)
   constraintArgs  <- o .: "constraintArgs" >>= traverse (typeFromJSON defaultAnn annFromJSON)
   constraintData  <- o .: "constraintData" >>= traverse constraintDataFromJSON
+  constraintMultiplicity  <- o .: "constraintMultiplicity"
   pure $ Constraint {..}
 
 typeFromJSON :: forall a. A.Parser a -> (A.Value -> A.Parser a) -> A.Value -> A.Parser (Type a)
@@ -394,6 +435,9 @@ instance {-# OVERLAPPING #-} A.FromJSON a => A.FromJSON (Constraint a) where
 
 instance A.FromJSON ConstraintData where
   parseJSON = constraintDataFromJSON
+
+instance A.FromJSON Multiplicity where
+  parseJSON = multiplicityFromJSON
 
 data RowListItem a = RowListItem
   { rowListAnn :: a
@@ -777,7 +821,7 @@ instance Ord (Constraint a) where
   compare = compareConstraint
 
 eqConstraint :: Constraint a -> Constraint b -> Bool
-eqConstraint (Constraint _ a b c d) (Constraint _ a' b' c' d') = a == a' && and (zipWith eqType b b') && and (zipWith eqType c c') && d == d'
+eqConstraint (Constraint _ a b c d e) (Constraint _ a' b' c' d' e') = a == a' && and (zipWith eqType b b') && and (zipWith eqType c c') && d == d' && e == e'
 
 compareConstraint :: Constraint a -> Constraint b -> Ordering
-compareConstraint (Constraint _ a b c d) (Constraint _ a' b' c' d') = compare a a' <> fold (zipWith compareType b b') <> fold (zipWith compareType c c') <> compare d d'
+compareConstraint (Constraint _ a b c d e) (Constraint _ a' b' c' d' e') = compare a a' <> fold (zipWith compareType b b') <> fold (zipWith compareType c c') <> compare d d' <> compare e e'

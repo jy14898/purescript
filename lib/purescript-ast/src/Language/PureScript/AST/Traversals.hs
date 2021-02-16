@@ -73,6 +73,7 @@ everywhereOnValues f g h = (f', g', h')
   g' (ObjectUpdateNested obj vs) = g (ObjectUpdateNested (g' obj) (fmap g' vs))
   g' (Abs binder v) = g (Abs (h' binder) (g' v))
   g' (App v1 v2) = g (App (g' v1) (g' v2))
+  g' (ErasedConstraint v1 a b c) = g (ErasedConstraint (g' v1) a b c)
   g' (Unused v) = g (Unused (g' v))
   g' (IfThenElse v1 v2 v3) = g (IfThenElse (g' v1) (g' v2) (g' v3))
   g' (Case vs alts) = g (Case (fmap g' vs) (fmap handleCaseAlternative alts))
@@ -148,6 +149,7 @@ everywhereOnValuesTopDownM f g h = (f' <=< f, g' <=< g, h' <=< h)
   g' (ObjectUpdateNested obj vs) = ObjectUpdateNested <$> (g obj >>= g') <*> traverse (g' <=< g) vs
   g' (Abs binder v) = Abs <$> (h binder >>= h') <*> (g v >>= g')
   g' (App v1 v2) = App <$> (g v1 >>= g') <*> (g v2 >>= g')
+  g' (ErasedConstraint v1 a b c) = ErasedConstraint <$> (g v1 >>= g') <*> pure a <*> pure b <*> pure c
   g' (Unused v) = Unused <$> (g v >>= g')
   g' (IfThenElse v1 v2 v3) = IfThenElse <$> (g v1 >>= g') <*> (g v2 >>= g') <*> (g v3 >>= g')
   g' (Case vs alts) = Case <$> traverse (g' <=< g) vs <*> traverse handleCaseAlternative alts
@@ -218,6 +220,7 @@ everywhereOnValuesM f g h = (f', g', h')
   g' (ObjectUpdateNested obj vs) = (ObjectUpdateNested <$> g' obj <*> traverse g' vs) >>= g
   g' (Abs binder v) = (Abs <$> h' binder <*> g' v) >>= g
   g' (App v1 v2) = (App <$> g' v1 <*> g' v2) >>= g
+  g' (ErasedConstraint v1 a b c) = (ErasedConstraint <$> g' v1 <*> pure a <*> pure b <*> pure c) >>= g
   g' (Unused v) = (Unused <$> g' v) >>= g
   g' (IfThenElse v1 v2 v3) = (IfThenElse <$> g' v1 <*> g' v2 <*> g' v3) >>= g
   g' (Case vs alts) = (Case <$> traverse g' vs <*> traverse handleCaseAlternative alts) >>= g
@@ -291,6 +294,7 @@ everythingOnValues (<>.) f g h i j = (f', g', h', i', j')
   g' v@(ObjectUpdateNested obj vs) = foldl (<>.) (g v <>. g' obj) (fmap g' vs)
   g' v@(Abs b v1) = g v <>. h' b <>. g' v1
   g' v@(App v1 v2) = g v <>. g' v1 <>. g' v2
+  g' v@(ErasedConstraint v1 _ _ _) = g v <>. g' v1
   g' v@(Unused v1) = g v <>. g' v1
   g' v@(IfThenElse v1 v2 v3) = g v <>. g' v1 <>. g' v2 <>. g' v3
   g' v@(Case vs alts) = foldl (<>.) (foldl (<>.) (g v) (fmap g' vs)) (fmap i' alts)
@@ -373,6 +377,7 @@ everythingWithContextOnValues s0 r0 (<>.) f g h i j = (f'' s0, g'' s0, h'' s0, i
   g' s (ObjectUpdateNested obj vs) = foldl (<>.) (g'' s obj) (fmap (g'' s) vs)
   g' s (Abs binder v1) = h'' s binder <>. g'' s v1
   g' s (App v1 v2) = g'' s v1 <>. g'' s v2
+  g' s (ErasedConstraint v1 _ _ _) = g'' s v1
   g' s (Unused v) = g'' s v
   g' s (IfThenElse v1 v2 v3) = g'' s v1 <>. g'' s v2 <>. g'' s v3
   g' s (Case vs alts) = foldl (<>.) (foldl (<>.) r0 (fmap (g'' s) vs)) (fmap (i'' s) alts)
@@ -459,6 +464,7 @@ everywhereWithContextOnValuesM s0 f g h i j = (f'' s0, g'' s0, h'' s0, i'' s0, j
   g' s (ObjectUpdateNested obj vs) = ObjectUpdateNested <$> g'' s obj <*> traverse (g'' s) vs
   g' s (Abs binder v) = Abs <$> h' s binder <*> g'' s v
   g' s (App v1 v2) = App <$> g'' s v1 <*> g'' s v2
+  g' s (ErasedConstraint v1 a b c) = ErasedConstraint <$> g'' s v1 <*> pure a <*> pure b <*> pure c
   g' s (Unused v) = Unused <$> g'' s v
   g' s (IfThenElse v1 v2 v3) = IfThenElse <$> g'' s v1 <*> g'' s v2 <*> g'' s v3
   g' s (Case vs alts) = Case <$> traverse (g'' s) vs <*> traverse (i'' s) alts
@@ -555,6 +561,7 @@ everythingWithScope f g h i j = (f'', g'', h'', i'', \s -> snd . j'' s)
     let s' = S.union (S.fromList (localBinderNames b)) s
     in h'' s b <> g'' s' v1
   g' s (App v1 v2) = g'' s v1 <> g'' s v2
+  g' s (ErasedConstraint v1 a b c) = g'' s v1
   g' s (Unused v) = g'' s v
   g' s (IfThenElse v1 v2 v3) = g'' s v1 <> g'' s v2 <> g'' s v3
   g' s (Case vs alts) = foldMap (g'' s) vs <> foldMap (i'' s) alts
@@ -655,6 +662,7 @@ accumTypes f = everythingOnValues mappend forDecls forValues forBinders (const m
   forDecls _ = mempty
 
   forValues (TypeClassDictionary c _ _) = foldMap f (constraintArgs c)
+  forValues (ErasedConstraint _ c _ _) = foldMap f (constraintArgs c)
   forValues (DeferredDictionary _ tys) = foldMap f tys
   forValues (TypedValue _ _ ty) = f ty
   forValues _ = mempty
@@ -672,6 +680,12 @@ overTypes f = let (_, f', _) = everywhereOnValues id g id in f'
   g (TypedValue checkTy val t) = TypedValue checkTy val (f t)
   g (TypeClassDictionary c sco hints) =
     TypeClassDictionary
+      (mapConstraintArgs (fmap f) c)
+      (updateCtx sco)
+      hints
+  g (ErasedConstraint val c sco hints) =
+    ErasedConstraint
+      val
       (mapConstraintArgs (fmap f) c)
       (updateCtx sco)
       hints

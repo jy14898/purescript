@@ -39,7 +39,7 @@ evalWriterT :: Monad m => WriterT b m r -> m r
 evalWriterT m = liftM fst (runWriterT m)
 
 checkSubsume
-  :: Maybe [(P.Ident, Entailment.InstanceContext, P.SourceConstraint)]
+  :: Maybe [(Maybe P.Ident, Entailment.InstanceContext, P.SourceConstraint)]
   -- ^ Additional constraints we need to satisfy
   -> P.Environment
   -- ^ The Environment which contains the relevant definitions and typeclasses
@@ -49,7 +49,7 @@ checkSubsume
   -- ^ The user supplied type
   -> P.SourceType
   -- ^ The type supplied by the environment
-  -> Maybe ((P.Expr, [(P.Ident, Entailment.InstanceContext, P.SourceConstraint)]), P.Environment)
+  -> Maybe ((P.Expr, [(Maybe P.Ident, Entailment.InstanceContext, P.SourceConstraint)]), P.Environment)
 checkSubsume unsolved env st userT envT = checkInEnvironment env st $ do
   let initializeSkolems =
         Skolem.introduceSkolemScope
@@ -73,13 +73,15 @@ checkSubsume unsolved env st userT envT = checkInEnvironment env st $ do
         (Entailment.SolverOptions
           { solverShouldGeneralize = True
           , solverDeferErrors      = False
+          -- Pretty sure this isn't the right default
+          , solverReturn           = Entailment.SInstance
           }) constraint' context []) unsolved
 
   -- Finally, check any constraints which were found during elaboration
   Entailment.replaceTypeClassDictionaries (isJust unsolved) expP
 
 accessorSearch
-  :: Maybe [(P.Ident, Entailment.InstanceContext, P.SourceConstraint)]
+  :: Maybe [(Maybe P.Ident, Entailment.InstanceContext, P.SourceConstraint)]
   -> P.Environment
   -> TC.CheckState
   -> P.SourceType
@@ -106,7 +108,7 @@ accessorSearch unsolved env st userT = maybe ([], []) fst $ checkInEnvironment e
     toRowPair (RowListItem _ lbl ty) = (lbl, ty)
 
 typeSearch
-  :: Maybe [(P.Ident, Entailment.InstanceContext, P.SourceConstraint)]
+  :: Maybe [(Maybe P.Ident, Entailment.InstanceContext, P.SourceConstraint)]
   -- ^ Additional constraints we need to satisfy
   -> P.Environment
   -- ^ The Environment which contains the relevant definitions and typeclasses

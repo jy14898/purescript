@@ -171,7 +171,7 @@ usedTypeNames moduleName = go
   usedNames _ = []
 
   usedConstraint :: SourceConstraint -> [ProperName 'TypeName]
-  usedConstraint (Constraint _ (Qualified (Just moduleName') name) _ _ _)
+  usedConstraint (Constraint _ (Qualified (Just moduleName') name) _ _ _ _)
     | moduleName == moduleName' = [coerceProperName name]
   usedConstraint _ = []
 

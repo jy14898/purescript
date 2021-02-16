@@ -37,6 +37,7 @@ printToken' showLayout = \case
   TokRightArrow Unicode    -> "→"
   TokRightFatArrow ASCII   -> "=>"
   TokRightFatArrow Unicode -> "⇒"
+  TokErased                -> "?"
   TokDoubleColon ASCII     -> "::"
   TokDoubleColon Unicode   -> "∷"
   TokForall ASCII          -> "forall"

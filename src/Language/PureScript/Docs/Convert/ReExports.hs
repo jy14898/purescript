@@ -506,11 +506,12 @@ internalErrorInModule msg = do
 -- If the provided Declaration is a TypeClassDeclaration, construct an
 -- appropriate Constraint for use with the types of its members.
 --
+-- TODO Incoporate other multiplicities
 typeClassConstraintFor :: Declaration -> Maybe Constraint'
 typeClassConstraintFor Declaration{..} =
   case declInfo of
     TypeClassDeclaration tyArgs _ _ ->
-      Just (P.Constraint () (P.Qualified Nothing (P.ProperName declTitle)) [] (mkConstraint tyArgs) Nothing)
+      Just (P.Constraint () (P.Qualified Nothing (P.ProperName declTitle)) [] (mkConstraint tyArgs) Nothing P.Unlimited)
     _ ->
       Nothing
   where

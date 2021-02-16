@@ -167,7 +167,10 @@ typesOf bindingGroupType moduleName vals = withFreshSubstitution $ do
 
       -- Check skolem variables did not escape their scope
       skolemEscapeCheck val'
-      return ((sai, (foldr (Abs . VarBinder nullSourceSpan . (\(x, _, _) -> x)) val' unsolved, generalized)), unsolved)
+
+      -- we need to inspect the x to know whether to apply it or leave as is
+      -- I think it works
+      return ((sai, (foldr (maybe id (Abs . VarBinder nullSourceSpan) . (\(x, _, _) -> x)) val' unsolved, generalized)), unsolved)
 
     -- Show warnings here, since types in wildcards might have been solved during
     -- instance resolution (by functional dependencies).
@@ -190,7 +193,7 @@ typesOf bindingGroupType moduleName vals = withFreshSubstitution $ do
 
     -- | Run type search to complete any typed hole error messages
     runTypeSearch
-      :: Maybe [(Ident, InstanceContext, SourceConstraint)]
+      :: Maybe [(Maybe Ident, InstanceContext, SourceConstraint)]
       -- ^ Any unsolved constraints which we need to continue to satisfy
       -> CheckState
       -- ^ The final type checker state
@@ -320,10 +323,18 @@ instantiatePolyTypeWithUnknowns
 instantiatePolyTypeWithUnknowns val (ForAll _ ident mbK ty _) = do
   u <- maybe (internalCompilerError "Unelaborated forall") freshTypeWithKind mbK
   instantiatePolyTypeWithUnknowns val $ replaceTypeVars ident u ty
-instantiatePolyTypeWithUnknowns val (ConstrainedType _ con ty) = do
+-- Don't you need to handle this?
+-- TODO
+-- I think this kinda ruins everything, right?
+-- Alternatively add a new Expr
+-- Instead of using App ... (TypeClassDictionary ...)
+-- We use Erased{SOmething}
+instantiatePolyTypeWithUnknowns val (ConstrainedType _ con@(Constraint _ _ _ _ _ mul) ty) = do
   dicts <- getTypeClassDictionaries
   hints <- getHints
-  instantiatePolyTypeWithUnknowns (App val (TypeClassDictionary con dicts hints)) ty
+  flip instantiatePolyTypeWithUnknowns ty $ case mul of
+      Unlimited -> App val (TypeClassDictionary con dicts hints)
+      Never -> ErasedConstraint val con dicts hints
 instantiatePolyTypeWithUnknowns val ty = return (val, ty)
 
 -- | Infer a type for a value, rethrowing any error to provide a more useful error message
@@ -407,10 +418,12 @@ infer' (Var ss var) = do
   checkVisibility var
   ty <- introduceSkolemScope <=< replaceAllTypeSynonyms <=< replaceTypeWildcards <=< lookupVariable $ var
   case ty of
-    ConstrainedType _ con ty' -> do
+    ConstrainedType _ con@(Constraint _ _ _ _ _ mul) ty' -> do
       dicts <- getTypeClassDictionaries
       hints <- getHints
-      return $ TypedValue' True (App (Var ss var) (TypeClassDictionary con dicts hints)) ty'
+      return $ flip (TypedValue' True) ty' $ case mul of
+          Unlimited -> App (Var ss var) (TypeClassDictionary con dicts hints)
+          Never -> ErasedConstraint (Var ss var) con dicts hints
     _ -> return $ TypedValue' True (Var ss var) ty
 infer' v@(Constructor _ c) = do
   env <- getEnv
@@ -434,10 +447,11 @@ infer' (IfThenElse cond th el) = do
 infer' (Let w ds val) = do
   (ds', tv@(TypedValue' _ _ valTy)) <- inferLetBinding [] ds val infer
   return $ TypedValue' True (Let w ds' (tvToExpr tv)) valTy
+-- I surely need to handle this?
 infer' (DeferredDictionary className tys) = do
   dicts <- getTypeClassDictionaries
   hints <- getHints
-  con <- checkConstraint (srcConstraint className [] tys Nothing)
+  con <- checkConstraint (srcConstraint className [] tys Nothing Unlimited)
   return $ TypedValue' False
              (TypeClassDictionary con dicts hints)
              (foldl srcTypeApp (srcTypeConstructor (fmap coerceProperName className)) tys)
@@ -672,11 +686,16 @@ check' val (ForAll ann ident mbK ty _) = do
         | otherwise = val
   val' <- tvToExpr <$> check skVal sk
   return $ TypedValue' True val' (ForAll ann ident mbK ty (Just scope))
-check' val t@(ConstrainedType _ con@(Constraint _ (Qualified _ (ProperName className)) _ _ _) ty) = do
+
+-- This generates unecessary fresh identifiers when mul == Never, but we can live with this
+check' val t@(ConstrainedType _ con@(Constraint _ (Qualified _ (ProperName className)) _ _ _ mul) ty) = do
   dictName <- freshIdent ("dict" <> className)
   dicts <- newDictionaries [] (Qualified Nothing dictName) con
   val' <- withBindingGroupVisible $ withTypeClassDictionaries dicts $ check val ty
-  return $ TypedValue' True (Abs (VarBinder nullSourceSpan dictName) (tvToExpr val')) t
+  return $ case mul of
+    Unlimited -> TypedValue' True (Abs (VarBinder nullSourceSpan dictName) (tvToExpr val')) t
+    Never -> TypedValue' True (tvToExpr val') t
+
 check' val u@(TUnknown _ _) = do
   val'@(TypedValue' _ _ ty) <- infer val
   -- Don't unify an unknown with an inferred polytype
@@ -714,6 +733,7 @@ check' v@(Var _ var) ty = do
   ty' <- introduceSkolemScope <=< replaceAllTypeSynonyms <=< replaceTypeWildcards $ ty
   elaborate <- subsumes repl ty'
   return $ TypedValue' True (elaborate v) ty'
+-- I surely need to handle this?
 check' (DeferredDictionary className tys) ty = do
   {-
   -- Here, we replace a placeholder for a superclass dictionary with a regular
@@ -723,7 +743,7 @@ check' (DeferredDictionary className tys) ty = do
   -}
   dicts <- getTypeClassDictionaries
   hints <- getHints
-  con <- checkConstraint (srcConstraint className [] tys Nothing)
+  con <- checkConstraint (srcConstraint className [] tys Nothing Unlimited)
   return $ TypedValue' False
              (TypeClassDictionary con dicts hints)
              ty
@@ -876,10 +896,12 @@ checkFunctionApplication' fn (ForAll _ ident mbK ty _) arg = do
   checkFunctionApplication fn replaced arg
 checkFunctionApplication' fn (KindedType _ ty _) arg =
   checkFunctionApplication fn ty arg
-checkFunctionApplication' fn (ConstrainedType _ con fnTy) arg = do
+checkFunctionApplication' fn (ConstrainedType _ con@(Constraint _ _ _ _ _ mul) fnTy) arg = do
   dicts <- getTypeClassDictionaries
   hints <- getHints
-  checkFunctionApplication' (App fn (TypeClassDictionary con dicts hints)) fnTy arg
+  (\a -> checkFunctionApplication a fnTy arg) $ case mul of
+      Unlimited -> App fn (TypeClassDictionary con dicts hints)
+      Never -> ErasedConstraint fn con dicts hints
 checkFunctionApplication' fn fnTy dict@TypeClassDictionary{} =
   return (fnTy, App fn dict)
 checkFunctionApplication' fn u arg = do

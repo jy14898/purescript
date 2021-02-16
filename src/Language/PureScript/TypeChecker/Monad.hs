@@ -175,12 +175,13 @@ warnAndRethrowWithPositionTC pos = rethrowWithPositionTC pos . warnWithPosition 
 -- | Temporarily make a collection of type class dictionaries available
 withTypeClassDictionaries
   :: MonadState CheckState m
-  => [NamedDict]
+  => [NamedDict']
   -> m a
   -> m a
 withTypeClassDictionaries entries action = do
   orig <- get
 
+  -- This is a bit annoying, they need the module name to construct the dict state map
   let mentries =
         M.fromListWith (M.unionWith (M.unionWith (<>)))
           [ (mn, M.singleton className (M.singleton (tcdValue entry) (pure entry)))
@@ -196,14 +197,14 @@ withTypeClassDictionaries entries action = do
 -- | Get the currently available map of type class dictionaries
 getTypeClassDictionaries
   :: (MonadState CheckState m)
-  => m (M.Map (Maybe ModuleName) (M.Map (Qualified (ProperName 'ClassName)) (M.Map (Qualified Ident) (NEL.NonEmpty NamedDict))))
+  => m (M.Map (Maybe ModuleName) (M.Map (Qualified (ProperName 'ClassName)) (M.Map (Qualified (Maybe Ident)) (NEL.NonEmpty NamedDict'))))
 getTypeClassDictionaries = typeClassDictionaries . checkEnv <$> get
 
 -- | Lookup type class dictionaries in a module.
 lookupTypeClassDictionaries
   :: (MonadState CheckState m)
   => Maybe ModuleName
-  -> m (M.Map (Qualified (ProperName 'ClassName)) (M.Map (Qualified Ident) (NEL.NonEmpty NamedDict)))
+  -> m (M.Map (Qualified (ProperName 'ClassName)) (M.Map (Qualified (Maybe Ident)) (NEL.NonEmpty NamedDict')))
 lookupTypeClassDictionaries mn = fromMaybe M.empty . M.lookup mn . typeClassDictionaries . checkEnv <$> get
 
 -- | Lookup type class dictionaries in a module.
@@ -211,7 +212,7 @@ lookupTypeClassDictionariesForClass
   :: (MonadState CheckState m)
   => Maybe ModuleName
   -> Qualified (ProperName 'ClassName)
-  -> m (M.Map (Qualified Ident) (NEL.NonEmpty NamedDict))
+  -> m (M.Map (Qualified (Maybe Ident)) (NEL.NonEmpty NamedDict'))
 lookupTypeClassDictionariesForClass mn cn = fromMaybe M.empty . M.lookup cn <$> lookupTypeClassDictionaries mn
 
 -- | Temporarily bind a collection of names to local variables
@@ -381,7 +382,7 @@ debugType :: Type a -> String
 debugType = init . prettyPrintType 100
 
 debugConstraint :: Constraint a -> String
-debugConstraint (Constraint ann clsName kinds args _) =
+debugConstraint (Constraint ann clsName kinds args _ _) =
   debugType $ foldl (TypeApp ann) (foldl (KindApp ann) (TypeConstructor ann (fmap coerceProperName clsName)) kinds) args
 
 debugTypes :: Environment -> [String]
@@ -440,7 +441,7 @@ debugTypeClassDictionaries = go . typeClassDictionaries
     let
       moduleName = maybe "" (\m -> "[" <> runModuleName m <> "] ") mbModuleName
       className' = showQualified runProperName className
-      ident' = showQualified runIdent ident
+      ident' = showQualified runIdent (fromMaybe UnusedIdent <$> ident)
       kds = intercalate " " $ fmap ((\a -> "@(" <> a <> ")") . debugType) $ tcdInstanceKinds $ NEL.head dicts
       tys = intercalate " " $ fmap ((\a -> "(" <> a <> ")") . debugType) $ tcdInstanceTypes $ NEL.head dicts
     pure $ "dict " <> unpack moduleName <> unpack className' <> " " <> unpack ident' <> " (" <> show (length dicts) <> ")" <> " " <> kds <> " " <> tys

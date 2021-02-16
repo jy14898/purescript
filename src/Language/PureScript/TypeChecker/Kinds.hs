@@ -173,7 +173,7 @@ inferKind = \tyToInfer ->
           pure (ty, kind' $> ann)
         Just (kind, _) -> do
           pure (ty, kind $> ann)
-    ConstrainedType ann' con@(Constraint ann v _ _ _) ty -> do
+    ConstrainedType ann' con@(Constraint ann v _ _ _ _) ty -> do
       env <- getEnv
       con' <- case M.lookup (coerceProperName <$> v) (E.types env) of
         Nothing ->
@@ -797,23 +797,25 @@ mapTypeDeclaration f = \case
   other ->
     other
 
+-- TODO: check multiplicity
 checkConstraint
   :: forall m. (MonadError MultipleErrors m, MonadState CheckState m)
   => SourceConstraint
   -> m SourceConstraint
-checkConstraint (Constraint ann clsName kinds args dat) = do
+checkConstraint (Constraint ann clsName kinds args mul dat) = do
   let ty = foldl (TypeApp ann) (foldl (KindApp ann) (TypeConstructor ann (fmap coerceProperName clsName)) kinds) args
   (_, kinds', args') <- unapplyTypes <$> checkKind ty E.kindConstraint
-  pure $ Constraint ann clsName kinds' args' dat
+  pure $ Constraint ann clsName kinds' args' mul dat
 
+-- TODO: check multiplicity
 applyConstraint
   :: forall m. (MonadError MultipleErrors m, MonadState CheckState m)
   => SourceConstraint
   -> m SourceConstraint
-applyConstraint (Constraint ann clsName kinds args dat) = do
+applyConstraint (Constraint ann clsName kinds args mul dat) = do
   let ty = foldl (TypeApp ann) (foldl (KindApp ann) (TypeConstructor ann (fmap coerceProperName clsName)) kinds) args
   (_, kinds', args') <- unapplyTypes <$> apply ty
-  pure $ Constraint ann clsName kinds' args' dat
+  pure $ Constraint ann clsName kinds' args' mul dat
 
 type InstanceDeclarationArgs =
   ( SourceAnn

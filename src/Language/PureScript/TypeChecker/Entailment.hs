@@ -1,4 +1,6 @@
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE TypeFamilies #-}
 
 -- |
 -- Type class entailment
@@ -9,6 +11,7 @@ module Language.PureScript.TypeChecker.Entailment
   , replaceTypeClassDictionaries
   , newDictionaries
   , entails
+  , ModeSing(..)
   ) where
 
 import Prelude.Compat
@@ -24,7 +27,7 @@ import Data.Foldable (for_, fold, toList)
 import Data.Function (on)
 import Data.Functor (($>))
 import Data.List (minimumBy, groupBy, nubBy, sortBy)
-import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
+import Data.Maybe (fromMaybe, listToMaybe, mapMaybe, fromJust, isJust)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Traversable (for)
@@ -65,12 +68,14 @@ namedInstanceIdentifier (NamedInstance i) = Just i
 namedInstanceIdentifier _ = Nothing
 
 -- | Description of a type class dictionary with instance evidence
-type TypeClassDict = TypeClassDictionaryInScope Evidence
+type TypeClassDict = TypeClassDictionaryInScope (Maybe Evidence)
 
 -- | The 'InstanceContext' tracks those constraints which can be satisfied.
+-- It's really hard for me to work out how this is used
+-- For now I think I should just wrap the key in a Maybe, but there might be a better/correct solution
 type InstanceContext = M.Map (Maybe ModuleName)
                          (M.Map (Qualified (ProperName 'ClassName))
-                           (M.Map (Qualified Ident) (NEL.NonEmpty NamedDict)))
+                           (M.Map (Qualified (Maybe Ident)) (NEL.NonEmpty NamedDict')))
 
 -- | A type substitution which makes an instance head match a list of types.
 --
@@ -81,13 +86,28 @@ type Matching a = M.Map Text a
 combineContexts :: InstanceContext -> InstanceContext -> InstanceContext
 combineContexts = M.unionWith (M.unionWith (M.unionWith (<>)))
 
+data Mode = Instance | NoInstance
+
+-- | Value-level proxies for the two modes
+data ModeSing (mode :: Mode) where
+  SInstance   :: ModeSing 'Instance
+  SNoInstance :: ModeSing 'NoInstance
+
+-- | This type family tracks what evidence we return from 'subsumes' for each
+-- mode.
+type family Result (mode :: Mode) where
+  Result 'Instance = Expr
+  -- Kinds, Types
+  Result 'NoInstance = Maybe ([SourceType], [SourceType])
+
+-- TODO Replace Ident with Maybe Ident to support generalizing erased constraints too
 -- | Replace type class dictionary placeholders with inferred type class dictionaries
 replaceTypeClassDictionaries
   :: forall m
    . (MonadState CheckState m, MonadError MultipleErrors m, MonadWriter MultipleErrors m, MonadSupply m)
   => Bool
   -> Expr
-  -> m (Expr, [(Ident, InstanceContext, SourceConstraint)])
+  -> m (Expr, [(Maybe Ident, InstanceContext, SourceConstraint)])
 replaceTypeClassDictionaries shouldGeneralize expr = flip evalStateT M.empty $ do
     -- Loop, deferring any unsolved constraints, until there are no more
     -- constraints which can be solved, then make a generalization pass.
@@ -101,18 +121,25 @@ replaceTypeClassDictionaries shouldGeneralize expr = flip evalStateT M.empty $ d
     -- This pass solves constraints where possible, deferring constraints if not.
     deferPass :: Expr -> StateT InstanceContext m (Expr, Any)
     deferPass = fmap (second fst) . runWriterT . f where
-      f :: Expr -> WriterT (Any, [(Ident, InstanceContext, SourceConstraint)]) (StateT InstanceContext m) Expr
+      f :: Expr -> WriterT (Any, [(Maybe Ident, InstanceContext, SourceConstraint)]) (StateT InstanceContext m) Expr
       (_, f, _) = everywhereOnValuesTopDownM return (go True) return
 
     -- This pass generalizes any remaining constraints
-    generalizePass :: Expr -> StateT InstanceContext m (Expr, [(Ident, InstanceContext, SourceConstraint)])
+    generalizePass :: Expr -> StateT InstanceContext m (Expr, [(Maybe Ident, InstanceContext, SourceConstraint)])
     generalizePass = fmap (second snd) . runWriterT . f where
-      f :: Expr -> WriterT (Any, [(Ident, InstanceContext, SourceConstraint)]) (StateT InstanceContext m) Expr
+      f :: Expr -> WriterT (Any, [(Maybe Ident, InstanceContext, SourceConstraint)]) (StateT InstanceContext m) Expr
       (_, f, _) = everywhereOnValuesTopDownM return (go False) return
 
-    go :: Bool -> Expr -> WriterT (Any, [(Ident, InstanceContext, SourceConstraint)]) (StateT InstanceContext m) Expr
+    -- TODO handle ErasedConstraint and return the held value
+    -- Use a type family to decide the return value?
+    go :: Bool -> Expr -> WriterT (Any, [(Maybe Ident, InstanceContext, SourceConstraint)]) (StateT InstanceContext m) Expr
     go deferErrors (TypeClassDictionary constraint context hints) =
-      rethrow (addHints hints) $ entails (SolverOptions shouldGeneralize deferErrors) constraint context hints
+      rethrow (addHints hints) $ entails (SolverOptions shouldGeneralize deferErrors SInstance) constraint context hints
+    go deferErrors (ErasedConstraint val constraint@(Constraint ss className _ _ conInfo mul) context hints) = do
+      ret <- (rethrow (addHints hints) $ entails (SolverOptions shouldGeneralize deferErrors SNoInstance) constraint context hints)
+      case ret of
+        Nothing -> pure val
+        Just (kinds, tys) -> pure (ErasedConstraint val (Constraint ss className kinds tys conInfo mul) context hints)
     go _ other = return other
 
 -- | Three options for how we can handle a constraint, depending on the mode we're in.
@@ -126,11 +153,12 @@ data EntailsResult a
   deriving Show
 
 -- | Options for the constraint solver
-data SolverOptions = SolverOptions
+data SolverOptions mode = SolverOptions
   { solverShouldGeneralize :: Bool
   -- ^ Should the solver be allowed to generalize over unsolved constraints?
   , solverDeferErrors      :: Bool
   -- ^ Should the solver be allowed to defer errors by skipping constraints?
+  , solverReturn           :: ModeSing mode
   }
 
 data Matched t
@@ -151,9 +179,9 @@ instance Monoid t => Monoid (Matched t) where
 -- | Check that the current set of type class dictionaries entail the specified type class goal, and, if so,
 -- return a type class dictionary reference.
 entails
-  :: forall m
+  :: forall m mode
    . (MonadState CheckState m, MonadError MultipleErrors m, MonadWriter MultipleErrors m, MonadSupply m)
-  => SolverOptions
+  => SolverOptions mode
   -- ^ Solver options
   -> SourceConstraint
   -- ^ The constraint to solve
@@ -161,7 +189,7 @@ entails
   -- ^ The contexts in which to solve the constraint
   -> [ErrorMessageHint]
   -- ^ Error message hints to apply to any instance errors
-  -> WriterT (Any, [(Ident, InstanceContext, SourceConstraint)]) (StateT InstanceContext m) Expr
+  -> WriterT (Any, [(Maybe Ident, InstanceContext, SourceConstraint)]) (StateT InstanceContext m) (Result mode)
 entails SolverOptions{..} constraint context hints =
     solve constraint
   where
@@ -176,7 +204,7 @@ entails SolverOptions{..} constraint context hints =
     forClassName _ ctx cn@C.Warn _ [msg] =
       -- Prefer a warning dictionary in scope if there is one available.
       -- This allows us to defer a warning by propagating the constraint.
-      findDicts ctx cn Nothing ++ [TypeClassDictionaryInScope [] 0 (WarnInstance msg) [] C.Warn [] [] [msg] Nothing]
+      findDicts ctx cn Nothing ++ [TypeClassDictionaryInScope [] 0 (Just (WarnInstance msg)) [] C.Warn [] [] [msg] Nothing]
     forClassName _ _ C.IsSymbol _ args | Just dicts <- solveIsSymbol args = dicts
     forClassName _ _ C.SymbolCompare _ args | Just dicts <- solveSymbolCompare args = dicts
     forClassName _ _ C.SymbolAppend _ args | Just dicts <- solveSymbolAppend args = dicts
@@ -197,18 +225,31 @@ entails SolverOptions{..} constraint context hints =
     ctorModules (KindedType _ ty _) = ctorModules ty
     ctorModules _ = Nothing
 
+    -- we have to check each dict to see if it has a value
+    -- if it doesnt then we have TypeClassDict
     findDicts :: InstanceContext -> Qualified (ProperName 'ClassName) -> Maybe ModuleName -> [TypeClassDict]
-    findDicts ctx cn = fmap (fmap NamedInstance) . foldMap NEL.toList . foldMap M.elems . (>>= M.lookup cn) . flip M.lookup ctx
+    -- [NamedDict' -> TypeClassDict] Just . NamedInstance
+    findDicts ctx cn = fmap (fmap (fmap NamedInstance . sequenceA)) . foldMap NEL.toList . foldMap M.elems . (>>= M.lookup cn) . flip M.lookup ctx
 
     valUndefined :: Expr
     valUndefined = Var nullSourceSpan (Qualified (Just C.Prim) (Ident C.undefined))
 
-    solve :: SourceConstraint -> WriterT (Any, [(Ident, InstanceContext, SourceConstraint)]) (StateT InstanceContext m) Expr
+    -- It looks like the point of solve is to find the dictionary for some constraint (as an Expr)
+    -- I'm not sure if we should make this return a Maybe and always call it on any constraint
+    -- Or if we should only handle counstraints that require a dict and throw an error if it only found "Never" instances
+    -- Perhaps both
+    --
+    -- I can't tell if this searches the current scope for any dictionaries that already relate to the constriant???
+    -- I'm pretty sure it does, because I don't see where else it oculd be done
+    solve :: SourceConstraint -> WriterT (Any, [(Maybe Ident, InstanceContext, SourceConstraint)]) (StateT InstanceContext m) (Result mode)
     solve con = go 0 con
       where
-        go :: Int -> SourceConstraint -> WriterT (Any, [(Ident, InstanceContext, SourceConstraint)]) (StateT InstanceContext m) Expr
-        go work (Constraint _ className' _ tys' _) | work > 1000 = throwError . errorMessage $ PossiblyInfiniteInstance className' tys'
-        go work con'@(Constraint _ className' kinds' tys' conInfo) = WriterT . StateT . (withErrorMessageHint (ErrorSolvingConstraint con') .) . runStateT . runWriterT $ do
+        go :: Int -> SourceConstraint -> WriterT (Any, [(Maybe Ident, InstanceContext, SourceConstraint)]) (StateT InstanceContext m) (Result mode)
+        go work (Constraint _ className' _ tys' _ _) | work > 1000 = throwError . errorMessage $ PossiblyInfiniteInstance className' tys'
+        -- TODO: handle Never case
+        --go _    (Constraint _ _ _ _ _ Never) = internalError "Unhandled case"
+
+        go work con'@(Constraint _ className' kinds' tys' conInfo mul) = WriterT . StateT . (withErrorMessageHint (ErrorSolvingConstraint con') .) . runStateT . runWriterT $ do
             -- We might have unified types by solving other constraints, so we need to
             -- apply the latest substitution.
             latestSubst <- lift . lift $ gets checkSubstitution
@@ -230,10 +271,17 @@ entails SolverOptions{..} constraint context hints =
 
             dicts <- lift . lift $ forClassNameM env (combineContexts context inferred) className' kinds'' tys''
 
+            -- Filter out those which don't provide a dictionary value, if we're looking for one
+            -- TODO throw a better error if there was a dict available of the wrong type
+            -- In case someone writes ? and tries to use the dictionary
+            let dicts' = case solverReturn of
+                 SInstance -> filter (isJust . tcdValue) dicts
+                 SNoInstance -> dicts
+
             let instances = do
                   chain <- groupBy ((==) `on` tcdChain) $
                            sortBy (compare `on` (tcdChain &&& tcdIndex)) $
-                           dicts
+                           dicts'
                   -- process instances in a chain in index order
                   let found = for chain $ \tcd ->
                                 -- Make sure the type unifies with the type in the type instance definition
@@ -263,18 +311,27 @@ entails SolverOptions{..} constraint context hints =
                   unifyTypes inferredType t2) (tcdInstanceTypes tcd) tys''
                 currentSubst' <- lift . lift $ gets checkSubstitution
                 let subst'' = fmap (substituteType currentSubst') subst'
+
                 -- Solve any necessary subgoals
                 args <- solveSubgoals subst'' (tcdDependencies tcd)
+                case solverReturn of
+                  SInstance -> do
+                    -- Because we made sure that we only had ones with values, we know this is Just
+                    -- Is this still true?
+                    initDict <- lift . lift $ mkDictionary (fromMaybe (internalError (unlines (show <$> dicts {-instances-}) <> "internal error 1")) $ tcdValue tcd) args
 
-                initDict <- lift . lift $ mkDictionary (tcdValue tcd) args
+                    let match = foldr (\(className, index) dict -> subclassDictionaryValue dict className index)
+                                      initDict
+                                      (tcdPath tcd)
 
-                let match = foldr (\(className, index) dict -> subclassDictionaryValue dict className index)
-                                  initDict
-                                  (tcdPath tcd)
+                    return (if typeClassIsEmpty then Unused match else match)
+                  SNoInstance -> do
+                    return Nothing
 
-                return (if typeClassIsEmpty then Unused match else match)
+              -- This could be a real issue. Maybe it needs to be Maybe ident?
               Unsolved unsolved -> do
                 -- Generate a fresh name for the unsolved constraint's new dictionary
+                -- TODO Don't generate this if we don't need it
                 ident <- freshIdent ("dict" <> runProperName (disqualify (constraintClass unsolved)))
                 let qident = Qualified Nothing ident
                 -- Store the new dictionary in the InstanceContext so that we can solve this goal in
@@ -282,13 +339,22 @@ entails SolverOptions{..} constraint context hints =
                 newDicts <- lift . lift $ newDictionaries [] qident unsolved
                 let newContext = mkContext newDicts
                 modify (combineContexts newContext)
+
                 -- Mark this constraint for generalization
-                tell (mempty, [(ident, context, unsolved)])
-                return (Var nullSourceSpan qident)
+                case solverReturn of
+                  SInstance -> do
+                    tell (mempty, [(Just ident, context, unsolved)])
+                    return (Var nullSourceSpan qident)
+                  SNoInstance -> do
+                    tell (mempty, [(Nothing, context, unsolved)])
+                    return Nothing
               Deferred ->
                 -- Constraint was deferred, just return the dictionary unchanged,
                 -- with no unsolved constraints. Hopefully, we can solve this later.
-                return (TypeClassDictionary (srcConstraint className' kinds'' tys'' conInfo) context hints)
+                case solverReturn of
+                  SInstance -> return (TypeClassDictionary (srcConstraint className' kinds'' tys'' conInfo mul) context hints)
+                  SNoInstance -> return (Just (kinds'', tys''))
+
           where
             -- | When checking functional dependencies, we need to use unification to make
             -- sure it is safe to use the selected instance. We will unify the solved type with
@@ -323,18 +389,27 @@ entails SolverOptions{..} constraint context hints =
                       (substituteType currentSubst . replaceAllTypeVars (M.toList subst) $ instKind)
                       (substituteType currentSubst tyKind)
 
+            -- respect mul
             unique :: [SourceType] -> [SourceType] -> [(a, TypeClassDict)] -> m (EntailsResult a)
             unique kindArgs tyArgs []
               | solverDeferErrors = return Deferred
               -- We need a special case for nullary type classes, since we want
               -- to generalize over Partial constraints.
               | solverShouldGeneralize && ((null kindArgs && null tyArgs) || any canBeGeneralized kindArgs || any canBeGeneralized tyArgs) =
-                  return (Unsolved (srcConstraint className' kindArgs tyArgs conInfo))
-              | otherwise = throwError . errorMessage $ NoInstanceFound (srcConstraint className' kindArgs tyArgs conInfo)
+                  return (Unsolved (srcConstraint className' kindArgs tyArgs conInfo mul))
+              | otherwise = throwError . errorMessage $ NoInstanceFound (srcConstraint className' kindArgs tyArgs conInfo mul)
             unique _ _ [(a, dict)] = return $ Solved a dict
+            -- I need to make sure we don't select the first instance we come across
+            -- But the one with the correct multiplicity
+            -- but the fact they're looking for overlapping instances here implies that they're looking at the original definitions of instances
+            -- not the current ones in scope + those???
+            -- depends if overlapping handles that
             unique _ tyArgs tcds
               | pairwiseAny overlapping (map snd tcds) =
-                  throwError . errorMessage $ OverlappingInstances className' tyArgs (tcds >>= (toList . namedInstanceIdentifier . tcdValue . snd))
+                  -- TODO Check the fromJust is safe, I think it is
+                  throwError . errorMessage $ OverlappingInstances className' tyArgs (tcds >>= (toList . namedInstanceIdentifier . fromMaybe (internalError "internal error 2") . tcdValue . snd))
+              -- find the first that has a value (mul = Unlimited)
+              -- indeed we just filter out all those that don't have a value
               | otherwise = return $ uncurry Solved (minimumBy (compare `on` length . tcdPath . snd) tcds)
 
             canBeGeneralized :: Type a -> Bool
@@ -347,6 +422,7 @@ entails SolverOptions{..} constraint context hints =
             --
             -- Dictionaries which are subclass dictionaries cannot overlap, since otherwise the overlap would have
             -- been caught when constructing superclass dictionaries.
+            -- if tcdDependencies = Nothing (not Just Nil), then does that mean they're passed dicts? I think so
             overlapping :: TypeClassDict -> TypeClassDict -> Bool
             overlapping TypeClassDictionaryInScope{ tcdPath = _ : _ } _ = False
             overlapping _ TypeClassDictionaryInScope{ tcdPath = _ : _ } = False
@@ -357,7 +433,7 @@ entails SolverOptions{..} constraint context hints =
             -- Create dictionaries for subgoals which still need to be solved by calling go recursively
             -- E.g. the goal (Show a, Show b) => Show (Either a b) can be satisfied if the current type
             -- unifies with Either a b, and we can satisfy the subgoals Show a and Show b recursively.
-            solveSubgoals :: Matching SourceType -> Maybe [SourceConstraint] -> WriterT (Any, [(Ident, InstanceContext, SourceConstraint)]) (StateT InstanceContext m) (Maybe [Expr])
+            solveSubgoals :: Matching SourceType -> Maybe [SourceConstraint] -> WriterT (Any, [(Maybe Ident, InstanceContext, SourceConstraint)]) (StateT InstanceContext m) (Maybe [Result mode])
             solveSubgoals _ Nothing = return Nothing
             solveSubgoals subst (Just subgoals) =
               Just <$> traverse (go (work + 1) . mapConstraintArgsAll (map (replaceAllTypeVars (M.toList subst)))) subgoals
@@ -404,13 +480,13 @@ entails SolverOptions{..} constraint context hints =
       -- We may have collected hints for the solving failure along the way, in
       -- which case we decorate the error with the first one.
       maybe id addHint (listToMaybe hints') `rethrow` case inertWanteds of
-        [] -> pure $ Just [TypeClassDictionaryInScope [] 0 EmptyClassInstance [] C.Coercible [] kinds [a, b] Nothing]
+        [] -> pure $ Just [TypeClassDictionaryInScope [] 0 (Just EmptyClassInstance) [] C.Coercible [] kinds [a, b] Nothing]
         (k, a', b') : _ | a' == b && b' == a -> throwError $ insoluble k b' a'
         (k, a', b') : _ -> throwError $ insoluble k a' b'
     solveCoercible _ _ _ _ = pure Nothing
 
     solveIsSymbol :: [SourceType] -> Maybe [TypeClassDict]
-    solveIsSymbol [TypeLevelString ann sym] = Just [TypeClassDictionaryInScope [] 0 (IsSymbolInstance sym) [] C.IsSymbol [] [] [TypeLevelString ann sym] Nothing]
+    solveIsSymbol [TypeLevelString ann sym] = Just [TypeClassDictionaryInScope [] 0 (Just $ IsSymbolInstance sym) [] C.IsSymbol [] [] [TypeLevelString ann sym] Nothing]
     solveIsSymbol _ = Nothing
 
     solveSymbolCompare :: [SourceType] -> Maybe [TypeClassDict]
@@ -420,14 +496,14 @@ entails SolverOptions{..} constraint context hints =
                   EQ -> C.orderingEQ
                   GT -> C.orderingGT
           args' = [arg0, arg1, srcTypeConstructor ordering]
-      in Just [TypeClassDictionaryInScope [] 0 EmptyClassInstance [] C.SymbolCompare [] [] args' Nothing]
+      in Just [TypeClassDictionaryInScope [] 0 (Just EmptyClassInstance) [] C.SymbolCompare [] [] args' Nothing]
     solveSymbolCompare _ = Nothing
 
     solveSymbolAppend :: [SourceType] -> Maybe [TypeClassDict]
     solveSymbolAppend [arg0, arg1, arg2] = do
       (arg0', arg1', arg2') <- appendSymbols arg0 arg1 arg2
       let args' = [arg0', arg1', arg2']
-      pure [TypeClassDictionaryInScope [] 0 EmptyClassInstance [] C.SymbolAppend [] [] args' Nothing]
+      pure [TypeClassDictionaryInScope [] 0 (Just EmptyClassInstance) [] C.SymbolAppend [] [] args' Nothing]
     solveSymbolAppend _ = Nothing
 
     -- | Append type level symbols, or, run backwards, strip a prefix or suffix
@@ -449,7 +525,7 @@ entails SolverOptions{..} constraint context hints =
     solveSymbolCons [arg0, arg1, arg2] = do
       (arg0', arg1', arg2') <- consSymbol arg0 arg1 arg2
       let args' = [arg0', arg1', arg2']
-      pure [TypeClassDictionaryInScope [] 0 EmptyClassInstance [] C.SymbolCons [] [] args' Nothing]
+      pure [TypeClassDictionaryInScope [] 0 (Just EmptyClassInstance) [] C.SymbolCons [] [] args' Nothing]
     solveSymbolCons _ = Nothing
 
     consSymbol :: SourceType -> SourceType -> SourceType -> Maybe (SourceType, SourceType, SourceType)
@@ -467,7 +543,7 @@ entails SolverOptions{..} constraint context hints =
     solveUnion :: [SourceType] -> [SourceType] -> Maybe [TypeClassDict]
     solveUnion kinds [l, r, u] = do
       (lOut, rOut, uOut, cst, vars) <- unionRows kinds l r u
-      pure [ TypeClassDictionaryInScope [] 0 EmptyClassInstance [] C.RowUnion vars kinds [lOut, rOut, uOut] cst ]
+      pure [ TypeClassDictionaryInScope [] 0 (Just EmptyClassInstance) [] C.RowUnion vars kinds [lOut, rOut, uOut] cst ]
     solveUnion _ _ = Nothing
 
     -- | Left biased union of two row types
@@ -492,19 +568,19 @@ entails SolverOptions{..} constraint context hints =
             -- types for such labels.
             _ -> ( not (null fixed)
                  , (fixed, rowVar)
-                 , Just [ srcConstraint C.RowUnion kinds [rest, r, rowVar] Nothing ]
+                 , Just [ srcConstraint C.RowUnion kinds [rest, r, rowVar] Nothing Unlimited ]
                  , [("r", kindRow (head kinds))]
                  )
 
     solveRowCons :: [SourceType] -> [SourceType] -> Maybe [TypeClassDict]
     solveRowCons kinds [TypeLevelString ann sym, ty, r, _] =
-      Just [ TypeClassDictionaryInScope [] 0 EmptyClassInstance [] C.RowCons [] kinds [TypeLevelString ann sym, ty, r, srcRCons (Label sym) ty r] Nothing ]
+      Just [ TypeClassDictionaryInScope [] 0 (Just EmptyClassInstance) [] C.RowCons [] kinds [TypeLevelString ann sym, ty, r, srcRCons (Label sym) ty r] Nothing ]
     solveRowCons _ _ = Nothing
 
     solveRowToList :: [SourceType] -> [SourceType] -> Maybe [TypeClassDict]
     solveRowToList [kind] [r, _] = do
       entries <- rowToRowList kind r
-      pure [ TypeClassDictionaryInScope [] 0 EmptyClassInstance [] C.RowToList [] [kind] [r, entries] Nothing ]
+      pure [ TypeClassDictionaryInScope [] 0 (Just EmptyClassInstance) [] C.RowToList [] [kind] [r, entries] Nothing ]
     solveRowToList _ _ = Nothing
 
     -- | Convert a closed row to a sorted list of entries
@@ -523,7 +599,7 @@ entails SolverOptions{..} constraint context hints =
     solveNub :: [SourceType] -> [SourceType] -> Maybe [TypeClassDict]
     solveNub kinds [r, _] = do
       r' <- nubRows r
-      pure [ TypeClassDictionaryInScope [] 0 EmptyClassInstance [] C.RowNub [] kinds [r, r'] Nothing ]
+      pure [ TypeClassDictionaryInScope [] 0 (Just EmptyClassInstance) [] C.RowNub [] kinds [r, r'] Nothing ]
     solveNub _ _ = Nothing
 
     nubRows :: SourceType -> Maybe SourceType
@@ -535,10 +611,10 @@ entails SolverOptions{..} constraint context hints =
 
     solveLacks :: [SourceType] -> [SourceType] -> Maybe [TypeClassDict]
     solveLacks kinds tys@[_, REmptyKinded _ _] =
-      pure [ TypeClassDictionaryInScope [] 0 EmptyClassInstance [] C.RowLacks [] kinds tys Nothing ]
+      pure [ TypeClassDictionaryInScope [] 0 (Just EmptyClassInstance) [] C.RowLacks [] kinds tys Nothing ]
     solveLacks kinds [TypeLevelString ann sym, r] = do
       (r', cst) <- rowLacks kinds sym r
-      pure [ TypeClassDictionaryInScope [] 0 EmptyClassInstance [] C.RowLacks [] kinds [TypeLevelString ann sym, r'] cst ]
+      pure [ TypeClassDictionaryInScope [] 0 (Just EmptyClassInstance) [] C.RowLacks [] kinds [TypeLevelString ann sym, r'] cst ]
     solveLacks _ _ = Nothing
 
     rowLacks :: [SourceType] -> PSString -> SourceType -> Maybe (SourceType, Maybe [SourceConstraint])
@@ -552,7 +628,7 @@ entails SolverOptions{..} constraint context hints =
 
         (canMakeProgress, cst) = case rest of
             REmptyKinded _ _ -> (True, Nothing)
-            _ -> (not (null fixed), Just [ srcConstraint C.RowLacks kinds [srcTypeLevelString sym, rest] Nothing ])
+            _ -> (not (null fixed), Just [ srcConstraint C.RowLacks kinds [srcTypeLevelString sym, rest] Nothing Unlimited])
 
 -- Check if an instance matches our list of types, allowing for types
 -- to be solved via functional dependencies. If the types match, we return a
@@ -677,27 +753,61 @@ matches deps TypeClassDictionaryInScope{..} tys =
 
 -- | Add a dictionary for the constraint to the scope, and dictionaries
 -- for all implied superclass instances.
+--data TypeClassDictionaryInScope v
+--   = TypeClassDictionaryInScope {
+--     -- | The instance chain
+--       tcdChain :: [Qualified Ident]
+--     -- | Index of the instance chain
+--     , tcdIndex :: Integer
+--     -- | The value with which the dictionary can be accessed at runtime
+--     , tcdValue :: v
+--     -- | How to obtain this instance via superclass relationships
+--     , tcdPath :: [(Qualified (ProperName 'ClassName), Integer)]
+--     -- | The name of the type class to which this type class instance applies
+--     , tcdClassName :: Qualified (ProperName 'ClassName)
+--     -- | Quantification of type variables in the instance head and dependencies
+--     , tcdForAll :: [(Text, SourceType)]
+--     -- | The kinds to which this type class instance applies
+--     , tcdInstanceKinds :: [SourceType]
+--     -- | The types to which this type class instance applies
+--     , tcdInstanceTypes :: [SourceType]
+--     -- | Type class dependencies which must be satisfied to construct this dictionary
+--     , tcdDependencies :: Maybe [SourceConstraint]
+--     }
+--     deriving (Show, Functor, Foldable, Traversable, Generic)
+
+-- make name a Maybe (Qualified Ident)
+-- so that we can choose to have it in scope but not have a value
+
 newDictionaries
   :: MonadState CheckState m
   => [(Qualified (ProperName 'ClassName), Integer)]
   -> Qualified Ident
   -> SourceConstraint
-  -> m [NamedDict]
-newDictionaries path name (Constraint _ className instanceKinds instanceTy _) = do
+  -> m [NamedDict']
+newDictionaries path name (Constraint _ className instanceKinds instanceTy _ mul) = do
     tcs <- gets (typeClasses . checkEnv)
+    -- this is used for the typeClass{Arguments,SuperClasses}
+    -- Oh we do indeed need to bring in the superclasses, just under the parents multiplicity
+    -- makes sense. This system actually supports superclasses not necessarily having dicts too
+    -- which isn't syntactically possible yet
+    --
+    -- I think we need a monoid instance for Multiplicity? I want to be able to combine them
     let TypeClassData{..} = fromMaybe (internalError "newDictionaries: type class lookup failed") $ M.lookup className tcs
-    supDicts <- join <$> zipWithM (\(Constraint ann supName supKinds supArgs _) index ->
+    supDicts <- join <$> zipWithM (\(Constraint ann supName supKinds supArgs _ supMul) index ->
                                       let sub = zip (map fst typeClassArguments) instanceTy in
                                       newDictionaries ((supName, index) : path)
                                                       name
                                                       (Constraint ann supName
                                                         (replaceAllTypeVars sub <$> supKinds)
                                                         (replaceAllTypeVars sub <$> supArgs)
-                                                        Nothing)
+                                                        Nothing
+                                                        (mul <> supMul))
                                   ) typeClassSuperclasses [0..]
-    return (TypeClassDictionaryInScope [] 0 name path className [] instanceKinds instanceTy Nothing : supDicts)
+    return (TypeClassDictionaryInScope [] 0 (flip onUnlimited mul <$> name) path className [] instanceKinds instanceTy Nothing : supDicts)
 
-mkContext :: [NamedDict] -> InstanceContext
+-- tcd
+mkContext :: [NamedDict'] -> InstanceContext
 mkContext = foldr combineContexts M.empty . map fromDict where
   fromDict d = M.singleton Nothing (M.singleton (tcdClassName d) (M.singleton (tcdValue d) (pure d)))
 

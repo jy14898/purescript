@@ -202,7 +202,13 @@ toBoolean tok = case tokValue tok of
   _                       -> internalError $ "Invalid boolean literal: " <> show tok
 
 toConstraint :: forall a. Monoid a => Type a -> Parser (Constraint a)
-toConstraint = convertParens
+toConstraint = toConstraint' Unlimited
+
+toErasedConstraint :: forall a. Monoid a => Type a -> Parser (Constraint a)
+toErasedConstraint = toConstraint' Never
+
+toConstraint' :: forall a. Monoid a => Multiplicity -> Type a -> Parser (Constraint a)
+toConstraint' m = convertParens
   where
   convertParens :: Type a -> Parser (Constraint a)
   convertParens = \case
@@ -216,11 +222,11 @@ toConstraint = convertParens
     TypeApp a lhs rhs -> convert (a <> ann) (rhs : acc) lhs
     TypeConstructor a name -> do
       for_ acc checkNoForalls
-      pure $ Constraint (a <> ann) (coerce name) acc
+      pure $ Constraint (a <> ann) (coerce name) m acc
     ty -> do
       let (tok1, tok2) = typeRange ty
       addFailure [tok1, tok2] ErrTypeInConstraint
-      pure $ Constraint mempty (QualifiedName tok1 Nothing (N.ProperName "<unexpected")) []
+      pure $ Constraint mempty (QualifiedName tok1 Nothing (N.ProperName "<unexpected")) m []
 
 isConstrained :: Type a -> Bool
 isConstrained = everythingOnTypes (||) $ \case

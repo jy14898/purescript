@@ -331,12 +331,18 @@ updateTypes goType = (goDecl, goExpr, goBinder)
   goDecl other =
     return other
 
+  -- TODO: This will need handling when making mul a type
   goExpr :: SourceSpan -> Expr -> m (SourceSpan, Expr)
   goExpr _ e@(PositionedValue pos _ _) = return (pos, e)
-  goExpr pos (TypeClassDictionary (Constraint ann name kinds tys info) dicts hints) = do
+  goExpr pos (TypeClassDictionary (Constraint ann name kinds tys mul info) dicts hints) = do
     kinds' <- traverse (goType' pos) kinds
     tys' <- traverse (goType' pos) tys
-    return (pos, TypeClassDictionary (Constraint ann name kinds' tys' info) dicts hints)
+    return (pos, TypeClassDictionary (Constraint ann name kinds' tys' mul info) dicts hints)
+  -- I have no idea if this is correct
+  goExpr pos (ErasedConstraint v (Constraint ann name kinds tys mul info) dicts hints) = do
+    kinds' <- traverse (goType' pos) kinds
+    tys' <- traverse (goType' pos) tys
+    return (pos, ErasedConstraint v (Constraint ann name kinds' tys' mul info) dicts hints)
   goExpr pos (DeferredDictionary cls tys) = do
     tys' <- traverse (goType' pos) tys
     return (pos, DeferredDictionary cls tys')

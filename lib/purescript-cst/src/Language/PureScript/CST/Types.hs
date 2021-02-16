@@ -55,6 +55,7 @@ data Token
   | TokLeftArrow !SourceStyle
   | TokRightArrow !SourceStyle
   | TokRightFatArrow !SourceStyle
+  | TokErased
   | TokDoubleColon !SourceStyle
   | TokForall !SourceStyle
   | TokEquals
@@ -156,8 +157,13 @@ data TypeVarBinding a
   | TypeVarName (Name Ident)
   deriving (Show, Eq, Ord, Functor, Foldable, Traversable, Generic)
 
+data Multiplicity
+  = Never
+  | Unlimited
+  deriving (Show, Eq, Ord, Generic)
+
 data Constraint a
-  = Constraint a (QualifiedName (N.ProperName 'N.ClassName)) [Type a]
+  = Constraint a (QualifiedName (N.ProperName 'N.ClassName)) Multiplicity [Type a]
   | ConstraintParens a (Wrapped (Constraint a))
   deriving (Show, Eq, Ord, Functor, Foldable, Traversable, Generic)
 
