@@ -202,7 +202,7 @@ addTypeClass _ qualifiedClassName args implies dependencies ds kind = do
 addTypeClassDictionaries
   :: (MonadState CheckState m)
   => Maybe ModuleName
-  -> M.Map (Qualified (ProperName 'ClassName)) (M.Map (Qualified (Maybe Ident)) (NEL.NonEmpty NamedDict'))
+  -> M.Map (Qualified (ProperName 'ClassName)) (M.Map (Qualified (Maybe Ident)) (NEL.NonEmpty NamedDict))
   -> m ()
 addTypeClassDictionaries mn entries =
   modify $ \st -> st { checkEnv = (checkEnv st) { typeClassDictionaries = insertState st } }

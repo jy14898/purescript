@@ -721,12 +721,12 @@ data Expr
   -- instance type, and the type class dictionaries in scope.
   --
   | TypeClassDictionary SourceConstraint
-                        (M.Map (Maybe ModuleName) (M.Map (Qualified (ProperName 'ClassName)) (M.Map (Qualified (Maybe Ident)) (NEL.NonEmpty NamedDict'))))
+                        (M.Map (Maybe ModuleName) (M.Map (Qualified (ProperName 'ClassName)) (M.Map (Qualified (Maybe Ident)) (NEL.NonEmpty NamedDict))))
                         [ErrorMessageHint]
 
   | ErasedConstraint Expr
                      SourceConstraint
-                     (M.Map (Maybe ModuleName) (M.Map (Qualified (ProperName 'ClassName)) (M.Map (Qualified (Maybe Ident)) (NEL.NonEmpty NamedDict'))))
+                     (M.Map (Maybe ModuleName) (M.Map (Qualified (ProperName 'ClassName)) (M.Map (Qualified (Maybe Ident)) (NEL.NonEmpty NamedDict))))
                      [ErrorMessageHint]
   -- |
   -- A typeclass dictionary accessor, the implementation is left unspecified until CoreFn desugaring.
@@ -735,7 +735,6 @@ data Expr
   -- |
   -- A placeholder for a superclass dictionary to be turned into a TypeClassDictionary during typechecking
   --
-  -- TODO Do we need to do anything with this (Erased?)
   | DeferredDictionary (Qualified (ProperName 'ClassName)) [SourceType]
   -- |
   -- A placeholder for an anonymous function argument

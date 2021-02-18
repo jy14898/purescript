@@ -235,7 +235,6 @@ token = peek >>= maybe (pure TokEof) k0
     '←'  -> next *> orOperator1 (TokLeftArrow Unicode) ch1
     '→'  -> next *> orOperator1 (TokRightArrow Unicode) ch1
     '⇒'  -> next *> orOperator1 (TokRightFatArrow Unicode) ch1
-    -- '?'  -> next *> 
     '∀'  -> next *> orOperator1 (TokForall Unicode) ch1
     '|'  -> next *> orOperator1 TokPipe ch1
     '.'  -> next *> orOperator1 TokDot ch1
@@ -244,7 +243,6 @@ token = peek >>= maybe (pure TokEof) k0
     '-'  -> next *> orOperator2 (TokRightArrow ASCII) ch1 '>'
     '='  -> next *> orOperator2' TokEquals (TokRightFatArrow ASCII) ch1 '>'
     ':'  -> next *> orOperator2' (TokOperator [] ":") (TokDoubleColon ASCII) ch1 ':'
-    -- Remove holes for now
     '?'  -> next *> hole ch1
     '\'' -> next *> char
     '"'  -> next *> string

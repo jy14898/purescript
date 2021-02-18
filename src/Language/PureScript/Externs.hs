@@ -179,7 +179,7 @@ applyExternsFileToEnvironment ExternsFile{..} = flip (foldl' applyDecl) efDeclar
               (updateMap (M.insertWith (<>) (qual (Just ident)) (pure dict)) className)
               (Just efModuleName) (typeClassDictionaries env) }
     where
-    dict :: NamedDict'
+    dict :: NamedDict
     dict = TypeClassDictionaryInScope ch idx (qual (Just ident)) [] className vars kinds tys cs
 
     updateMap :: (Ord k, Monoid a) => (a -> a) -> k -> M.Map k a -> M.Map k a

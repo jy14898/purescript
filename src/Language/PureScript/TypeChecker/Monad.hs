@@ -175,7 +175,7 @@ warnAndRethrowWithPositionTC pos = rethrowWithPositionTC pos . warnWithPosition 
 -- | Temporarily make a collection of type class dictionaries available
 withTypeClassDictionaries
   :: MonadState CheckState m
-  => [NamedDict']
+  => [NamedDict]
   -> m a
   -> m a
 withTypeClassDictionaries entries action = do
@@ -197,14 +197,14 @@ withTypeClassDictionaries entries action = do
 -- | Get the currently available map of type class dictionaries
 getTypeClassDictionaries
   :: (MonadState CheckState m)
-  => m (M.Map (Maybe ModuleName) (M.Map (Qualified (ProperName 'ClassName)) (M.Map (Qualified (Maybe Ident)) (NEL.NonEmpty NamedDict'))))
+  => m (M.Map (Maybe ModuleName) (M.Map (Qualified (ProperName 'ClassName)) (M.Map (Qualified (Maybe Ident)) (NEL.NonEmpty NamedDict))))
 getTypeClassDictionaries = typeClassDictionaries . checkEnv <$> get
 
 -- | Lookup type class dictionaries in a module.
 lookupTypeClassDictionaries
   :: (MonadState CheckState m)
   => Maybe ModuleName
-  -> m (M.Map (Qualified (ProperName 'ClassName)) (M.Map (Qualified (Maybe Ident)) (NEL.NonEmpty NamedDict')))
+  -> m (M.Map (Qualified (ProperName 'ClassName)) (M.Map (Qualified (Maybe Ident)) (NEL.NonEmpty NamedDict)))
 lookupTypeClassDictionaries mn = fromMaybe M.empty . M.lookup mn . typeClassDictionaries . checkEnv <$> get
 
 -- | Lookup type class dictionaries in a module.
@@ -212,7 +212,7 @@ lookupTypeClassDictionariesForClass
   :: (MonadState CheckState m)
   => Maybe ModuleName
   -> Qualified (ProperName 'ClassName)
-  -> m (M.Map (Qualified (Maybe Ident)) (NEL.NonEmpty NamedDict'))
+  -> m (M.Map (Qualified (Maybe Ident)) (NEL.NonEmpty NamedDict))
 lookupTypeClassDictionariesForClass mn cn = fromMaybe M.empty . M.lookup cn <$> lookupTypeClassDictionaries mn
 
 -- | Temporarily bind a collection of names to local variables

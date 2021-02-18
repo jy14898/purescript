@@ -299,7 +299,6 @@ type1 :: { Type () }
   : type2 { $1 }
   | forall many(typeVarBinding) '.' type1 { TypeForall () $1 $2 $3 $4 }
 
--- TODO Add multiplicity parameter
 type2 :: { Type () }
   : type3 { $1 }
   | type3 '->' type1 { TypeArr () $1 $2 $3 }

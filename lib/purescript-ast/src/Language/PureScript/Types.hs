@@ -198,11 +198,8 @@ data Constraint a = Constraint
 instance NFData a => NFData (Constraint a)
 instance Serialise a => Serialise (Constraint a)
 
--- Default to Unlimited for now
 srcConstraint :: Qualified (ProperName 'ClassName) -> [SourceType] -> [SourceType] -> Maybe ConstraintData -> Multiplicity -> SourceConstraint
 srcConstraint = Constraint NullSourceAnn
---srcConstraint :: Qualified (ProperName 'ClassName) -> [SourceType] -> [SourceType] -> Maybe ConstraintData -> SourceConstraint
---srcConstraint a b c d = Constraint NullSourceAnn a b c d Unlimited
 
 mapConstraintArgs :: ([Type a] -> [Type a]) -> Constraint a -> Constraint a
 mapConstraintArgs f c = c { constraintArgs = f (constraintArgs c) }

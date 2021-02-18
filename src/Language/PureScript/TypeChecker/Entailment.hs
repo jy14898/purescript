@@ -75,7 +75,7 @@ type TypeClassDict = TypeClassDictionaryInScope (Maybe Evidence)
 -- For now I think I should just wrap the key in a Maybe, but there might be a better/correct solution
 type InstanceContext = M.Map (Maybe ModuleName)
                          (M.Map (Qualified (ProperName 'ClassName))
-                           (M.Map (Qualified (Maybe Ident)) (NEL.NonEmpty NamedDict')))
+                           (M.Map (Qualified (Maybe Ident)) (NEL.NonEmpty NamedDict)))
 
 -- | A type substitution which makes an instance head match a list of types.
 --
@@ -228,7 +228,7 @@ entails SolverOptions{..} constraint context hints =
     -- we have to check each dict to see if it has a value
     -- if it doesnt then we have TypeClassDict
     findDicts :: InstanceContext -> Qualified (ProperName 'ClassName) -> Maybe ModuleName -> [TypeClassDict]
-    -- [NamedDict' -> TypeClassDict] Just . NamedInstance
+    -- [NamedDict -> TypeClassDict] Just . NamedInstance
     findDicts ctx cn = fmap (fmap (fmap NamedInstance . sequenceA)) . foldMap NEL.toList . foldMap M.elems . (>>= M.lookup cn) . flip M.lookup ctx
 
     valUndefined :: Expr
@@ -784,7 +784,7 @@ newDictionaries
   => [(Qualified (ProperName 'ClassName), Integer)]
   -> Qualified Ident
   -> SourceConstraint
-  -> m [NamedDict']
+  -> m [NamedDict]
 newDictionaries path name (Constraint _ className instanceKinds instanceTy _ mul) = do
     tcs <- gets (typeClasses . checkEnv)
     -- this is used for the typeClass{Arguments,SuperClasses}
@@ -807,7 +807,7 @@ newDictionaries path name (Constraint _ className instanceKinds instanceTy _ mul
     return (TypeClassDictionaryInScope [] 0 (flip onUnlimited mul <$> name) path className [] instanceKinds instanceTy Nothing : supDicts)
 
 -- tcd
-mkContext :: [NamedDict'] -> InstanceContext
+mkContext :: [NamedDict] -> InstanceContext
 mkContext = foldr combineContexts M.empty . map fromDict where
   fromDict d = M.singleton Nothing (M.singleton (tcdClassName d) (M.singleton (tcdValue d) (pure d)))
 
