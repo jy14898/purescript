@@ -71,8 +71,6 @@ namedInstanceIdentifier _ = Nothing
 type TypeClassDict = TypeClassDictionaryInScope (Maybe Evidence)
 
 -- | The 'InstanceContext' tracks those constraints which can be satisfied.
--- It's really hard for me to work out how this is used
--- For now I think I should just wrap the key in a Maybe, but there might be a better/correct solution
 type InstanceContext = M.Map (Maybe ModuleName)
                          (M.Map (Qualified (ProperName 'ClassName))
                            (M.Map (Qualified (Maybe Ident)) (NEL.NonEmpty NamedDict)))
@@ -93,14 +91,12 @@ data ModeSing (mode :: Mode) where
   SInstance   :: ModeSing 'Instance
   SNoInstance :: ModeSing 'NoInstance
 
--- | This type family tracks what evidence we return from 'subsumes' for each
--- mode.
+-- | This type family tracks what we return from 'entails' for each
+-- type of Constraint.
 type family Result (mode :: Mode) where
   Result 'Instance = Expr
-  -- Kinds, Types
   Result 'NoInstance = Maybe ([SourceType], [SourceType])
 
--- TODO Replace Ident with Maybe Ident to support generalizing erased constraints too
 -- | Replace type class dictionary placeholders with inferred type class dictionaries
 replaceTypeClassDictionaries
   :: forall m
@@ -130,8 +126,6 @@ replaceTypeClassDictionaries shouldGeneralize expr = flip evalStateT M.empty $ d
       f :: Expr -> WriterT (Any, [(Maybe Ident, InstanceContext, SourceConstraint)]) (StateT InstanceContext m) Expr
       (_, f, _) = everywhereOnValuesTopDownM return (go False) return
 
-    -- TODO handle ErasedConstraint and return the held value
-    -- Use a type family to decide the return value?
     go :: Bool -> Expr -> WriterT (Any, [(Maybe Ident, InstanceContext, SourceConstraint)]) (StateT InstanceContext m) Expr
     go deferErrors (TypeClassDictionary constraint context hints) =
       rethrow (addHints hints) $ entails (SolverOptions shouldGeneralize deferErrors SInstance) constraint context hints
@@ -225,29 +219,17 @@ entails SolverOptions{..} constraint context hints =
     ctorModules (KindedType _ ty _) = ctorModules ty
     ctorModules _ = Nothing
 
-    -- we have to check each dict to see if it has a value
-    -- if it doesnt then we have TypeClassDict
     findDicts :: InstanceContext -> Qualified (ProperName 'ClassName) -> Maybe ModuleName -> [TypeClassDict]
-    -- [NamedDict -> TypeClassDict] Just . NamedInstance
     findDicts ctx cn = fmap (fmap (fmap NamedInstance . sequenceA)) . foldMap NEL.toList . foldMap M.elems . (>>= M.lookup cn) . flip M.lookup ctx
 
     valUndefined :: Expr
     valUndefined = Var nullSourceSpan (Qualified (Just C.Prim) (Ident C.undefined))
 
-    -- It looks like the point of solve is to find the dictionary for some constraint (as an Expr)
-    -- I'm not sure if we should make this return a Maybe and always call it on any constraint
-    -- Or if we should only handle counstraints that require a dict and throw an error if it only found "Never" instances
-    -- Perhaps both
-    --
-    -- I can't tell if this searches the current scope for any dictionaries that already relate to the constriant???
-    -- I'm pretty sure it does, because I don't see where else it oculd be done
     solve :: SourceConstraint -> WriterT (Any, [(Maybe Ident, InstanceContext, SourceConstraint)]) (StateT InstanceContext m) (Result mode)
     solve con = go 0 con
       where
         go :: Int -> SourceConstraint -> WriterT (Any, [(Maybe Ident, InstanceContext, SourceConstraint)]) (StateT InstanceContext m) (Result mode)
         go work (Constraint _ className' _ tys' _ _) | work > 1000 = throwError . errorMessage $ PossiblyInfiniteInstance className' tys'
-        -- TODO: handle Never case
-        --go _    (Constraint _ _ _ _ _ Never) = internalError "Unhandled case"
 
         go work con'@(Constraint _ className' kinds' tys' conInfo mul) = WriterT . StateT . (withErrorMessageHint (ErrorSolvingConstraint con') .) . runStateT . runWriterT $ do
             -- We might have unified types by solving other constraints, so we need to
@@ -316,9 +298,7 @@ entails SolverOptions{..} constraint context hints =
                 args <- solveSubgoals subst'' (tcdDependencies tcd)
                 case solverReturn of
                   SInstance -> do
-                    -- Because we made sure that we only had ones with values, we know this is Just
-                    -- Is this still true?
-                    initDict <- lift . lift $ mkDictionary (fromMaybe (internalError (unlines (show <$> dicts {-instances-}) <> "internal error 1")) $ tcdValue tcd) args
+                    initDict <- lift . lift $ mkDictionary (fromJust $ tcdValue tcd) args
 
                     let match = foldr (\(className, index) dict -> subclassDictionaryValue dict className index)
                                       initDict
@@ -389,7 +369,6 @@ entails SolverOptions{..} constraint context hints =
                       (substituteType currentSubst . replaceAllTypeVars (M.toList subst) $ instKind)
                       (substituteType currentSubst tyKind)
 
-            -- respect mul
             unique :: [SourceType] -> [SourceType] -> [(a, TypeClassDict)] -> m (EntailsResult a)
             unique kindArgs tyArgs []
               | solverDeferErrors = return Deferred
@@ -399,17 +378,9 @@ entails SolverOptions{..} constraint context hints =
                   return (Unsolved (srcConstraint className' kindArgs tyArgs conInfo mul))
               | otherwise = throwError . errorMessage $ NoInstanceFound (srcConstraint className' kindArgs tyArgs conInfo mul)
             unique _ _ [(a, dict)] = return $ Solved a dict
-            -- I need to make sure we don't select the first instance we come across
-            -- But the one with the correct multiplicity
-            -- but the fact they're looking for overlapping instances here implies that they're looking at the original definitions of instances
-            -- not the current ones in scope + those???
-            -- depends if overlapping handles that
             unique _ tyArgs tcds
               | pairwiseAny overlapping (map snd tcds) =
-                  -- TODO Check the fromJust is safe, I think it is
-                  throwError . errorMessage $ OverlappingInstances className' tyArgs (tcds >>= (toList . namedInstanceIdentifier . fromMaybe (internalError "internal error 2") . tcdValue . snd))
-              -- find the first that has a value (mul = Unlimited)
-              -- indeed we just filter out all those that don't have a value
+                  throwError . errorMessage $ OverlappingInstances className' tyArgs (tcds >>= (toList . namedInstanceIdentifier . fromJust . tcdValue . snd))
               | otherwise = return $ uncurry Solved (minimumBy (compare `on` length . tcdPath . snd) tcds)
 
             canBeGeneralized :: Type a -> Bool
@@ -753,32 +724,6 @@ matches deps TypeClassDictionaryInScope{..} tys =
 
 -- | Add a dictionary for the constraint to the scope, and dictionaries
 -- for all implied superclass instances.
---data TypeClassDictionaryInScope v
---   = TypeClassDictionaryInScope {
---     -- | The instance chain
---       tcdChain :: [Qualified Ident]
---     -- | Index of the instance chain
---     , tcdIndex :: Integer
---     -- | The value with which the dictionary can be accessed at runtime
---     , tcdValue :: v
---     -- | How to obtain this instance via superclass relationships
---     , tcdPath :: [(Qualified (ProperName 'ClassName), Integer)]
---     -- | The name of the type class to which this type class instance applies
---     , tcdClassName :: Qualified (ProperName 'ClassName)
---     -- | Quantification of type variables in the instance head and dependencies
---     , tcdForAll :: [(Text, SourceType)]
---     -- | The kinds to which this type class instance applies
---     , tcdInstanceKinds :: [SourceType]
---     -- | The types to which this type class instance applies
---     , tcdInstanceTypes :: [SourceType]
---     -- | Type class dependencies which must be satisfied to construct this dictionary
---     , tcdDependencies :: Maybe [SourceConstraint]
---     }
---     deriving (Show, Functor, Foldable, Traversable, Generic)
-
--- make name a Maybe (Qualified Ident)
--- so that we can choose to have it in scope but not have a value
-
 newDictionaries
   :: MonadState CheckState m
   => [(Qualified (ProperName 'ClassName), Integer)]
@@ -787,12 +732,6 @@ newDictionaries
   -> m [NamedDict]
 newDictionaries path name (Constraint _ className instanceKinds instanceTy _ mul) = do
     tcs <- gets (typeClasses . checkEnv)
-    -- this is used for the typeClass{Arguments,SuperClasses}
-    -- Oh we do indeed need to bring in the superclasses, just under the parents multiplicity
-    -- makes sense. This system actually supports superclasses not necessarily having dicts too
-    -- which isn't syntactically possible yet
-    --
-    -- I think we need a monoid instance for Multiplicity? I want to be able to combine them
     let TypeClassData{..} = fromMaybe (internalError "newDictionaries: type class lookup failed") $ M.lookup className tcs
     supDicts <- join <$> zipWithM (\(Constraint ann supName supKinds supArgs _ supMul) index ->
                                       let sub = zip (map fst typeClassArguments) instanceTy in
@@ -806,7 +745,6 @@ newDictionaries path name (Constraint _ className instanceKinds instanceTy _ mul
                                   ) typeClassSuperclasses [0..]
     return (TypeClassDictionaryInScope [] 0 (flip onUnlimited mul <$> name) path className [] instanceKinds instanceTy Nothing : supDicts)
 
--- tcd
 mkContext :: [NamedDict] -> InstanceContext
 mkContext = foldr combineContexts M.empty . map fromDict where
   fromDict d = M.singleton Nothing (M.singleton (tcdClassName d) (M.singleton (tcdValue d) (pure d)))

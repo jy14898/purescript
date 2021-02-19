@@ -797,7 +797,6 @@ mapTypeDeclaration f = \case
   other ->
     other
 
--- TODO: check multiplicity
 checkConstraint
   :: forall m. (MonadError MultipleErrors m, MonadState CheckState m)
   => SourceConstraint
@@ -807,7 +806,6 @@ checkConstraint (Constraint ann clsName kinds args mul dat) = do
   (_, kinds', args') <- unapplyTypes <$> checkKind ty E.kindConstraint
   pure $ Constraint ann clsName kinds' args' mul dat
 
--- TODO: check multiplicity
 applyConstraint
   :: forall m. (MonadError MultipleErrors m, MonadState CheckState m)
   => SourceConstraint

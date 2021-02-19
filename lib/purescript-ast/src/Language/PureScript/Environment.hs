@@ -42,7 +42,6 @@ data Environment = Environment
   -- in the `types` field.
   , typeSynonyms :: M.Map (Qualified (ProperName 'TypeName)) ([(Text, Maybe SourceType)], SourceType)
   -- ^ Type synonyms currently in scope
-  --
   , typeClassDictionaries :: M.Map (Maybe ModuleName) (M.Map (Qualified (ProperName 'ClassName)) (M.Map (Qualified (Maybe Ident)) (NEL.NonEmpty NamedDict)))
   -- ^ Available type class dictionaries. When looking up 'Nothing' in the
   -- outer map, this returns the map of type class dictionaries in local

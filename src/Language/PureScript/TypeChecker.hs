@@ -511,7 +511,6 @@ typeCheckAll moduleName _ = traverse go
           else throwError . errorMessage $
                 OverlappingInstances className
                                       tys'
-                                      -- I think this is okay
                                       [fromJust <$> ident, Qualified (Just moduleName) dictName]
 
   instancesAreApart

@@ -168,8 +168,6 @@ typesOf bindingGroupType moduleName vals = withFreshSubstitution $ do
       -- Check skolem variables did not escape their scope
       skolemEscapeCheck val'
 
-      -- we need to inspect the x to know whether to apply it or leave as is
-      -- I think it works
       return ((sai, (foldr (maybe id (Abs . VarBinder nullSourceSpan) . (\(x, _, _) -> x)) val' unsolved, generalized)), unsolved)
 
     -- Show warnings here, since types in wildcards might have been solved during
@@ -323,12 +321,6 @@ instantiatePolyTypeWithUnknowns
 instantiatePolyTypeWithUnknowns val (ForAll _ ident mbK ty _) = do
   u <- maybe (internalCompilerError "Unelaborated forall") freshTypeWithKind mbK
   instantiatePolyTypeWithUnknowns val $ replaceTypeVars ident u ty
--- Don't you need to handle this?
--- TODO
--- I think this kinda ruins everything, right?
--- Alternatively add a new Expr
--- Instead of using App ... (TypeClassDictionary ...)
--- We use Erased{SOmething}
 instantiatePolyTypeWithUnknowns val (ConstrainedType _ con@(Constraint _ _ _ _ _ mul) ty) = do
   dicts <- getTypeClassDictionaries
   hints <- getHints
@@ -447,7 +439,6 @@ infer' (IfThenElse cond th el) = do
 infer' (Let w ds val) = do
   (ds', tv@(TypedValue' _ _ valTy)) <- inferLetBinding [] ds val infer
   return $ TypedValue' True (Let w ds' (tvToExpr tv)) valTy
--- I surely need to handle this?
 infer' (DeferredDictionary className tys) = do
   dicts <- getTypeClassDictionaries
   hints <- getHints
@@ -733,7 +724,6 @@ check' v@(Var _ var) ty = do
   ty' <- introduceSkolemScope <=< replaceAllTypeSynonyms <=< replaceTypeWildcards $ ty
   elaborate <- subsumes repl ty'
   return $ TypedValue' True (elaborate v) ty'
--- I surely need to handle this?
 check' (DeferredDictionary className tys) ty = do
   {-
   -- Here, we replace a placeholder for a superclass dictionary with a regular

@@ -181,7 +181,6 @@ withTypeClassDictionaries
 withTypeClassDictionaries entries action = do
   orig <- get
 
-  -- This is a bit annoying, they need the module name to construct the dict state map
   let mentries =
         M.fromListWith (M.unionWith (M.unionWith (<>)))
           [ (mn, M.singleton className (M.singleton (tcdValue entry) (pure entry)))
