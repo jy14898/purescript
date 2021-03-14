@@ -7,7 +7,7 @@ module Language.PureScript.CodeGen.JS
   ) where
 
 import Prelude.Compat
-import Protolude (ordNub)
+import Protolude (ordNub, hash)
 
 import Control.Arrow ((&&&))
 import Control.Monad (forM, replicateM, void)
@@ -252,11 +252,11 @@ moduleToJs (Module _ coms mn _ imps exps foreigns decls) foreign_ =
                   AST.Function Nothing Nothing ["value"]
                     (AST.Block Nothing [AST.Return Nothing $ AST.Var Nothing "value"]))])
   valueToJs' (Constructor _ _ ctor []) =
-    return $ AST.ObjectLiteral Nothing [("tag", AST.StringLiteral Nothing (mkString (properToJs ctor)))]
+    return $ AST.ObjectLiteral Nothing [("tag", tag ctor)]
   valueToJs' (Constructor _ _ ctor fields) =
     let constructor =
           let body = AST.ObjectLiteral Nothing
-               ([("tag", AST.StringLiteral Nothing (mkString (properToJs ctor)))] ++ ((\field -> (mkString $ identToJs field, AST.Var Nothing $ identToJs field)) <$> fields))
+               ([("tag", tag ctor)] ++ ((\field -> (mkString $ identToJs field, AST.Var Nothing $ identToJs field)) <$> fields))
           in AST.Function Nothing (Just (properToJs ctor)) (identToJs `map` fields) (AST.Block Nothing [AST.Return Nothing body])
         createFn =
           let body = AST.App Nothing (AST.Var Nothing (properToJs ctor)) (var `map` fields)
@@ -264,6 +264,8 @@ moduleToJs (Module _ coms mn _ imps exps foreigns decls) foreign_ =
     in return $ iife (properToJs ctor) [ constructor
                           , AST.Assignment Nothing (accessorString "create" (AST.Var Nothing (properToJs ctor))) createFn
                           ]
+
+  tag ctor = AST.NumericLiteral Nothing $ Left $ toInteger $ flip mod 2147483647 $ hash $ properToJs ctor
 
 
   iife :: Text -> [AST] -> AST
@@ -376,7 +378,7 @@ moduleToJs (Module _ coms mn _ imps exps foreigns decls) foreign_ =
     return $ case ctorType of
       ProductType -> js
       SumType ->
-        [AST.IfElse Nothing (AST.Binary Nothing AST.EqualTo (accessorString (mkString "tag") $ AST.Var Nothing varName) (AST.StringLiteral Nothing $ mkString $ properToJs ctor))
+        [AST.IfElse Nothing (AST.Binary Nothing AST.EqualTo (accessorString (mkString "tag") $ AST.Var Nothing varName) (tag ctor))
                   (AST.Block Nothing js)
                   Nothing]
     where
