@@ -252,11 +252,11 @@ moduleToJs (Module _ coms mn _ imps exps foreigns decls) foreign_ =
                   AST.Function Nothing Nothing ["value"]
                     (AST.Block Nothing [AST.Return Nothing $ AST.Var Nothing "value"]))])
   valueToJs' (Constructor _ _ ctor []) =
-    return $ AST.ObjectLiteral Nothing [("tag", AST.StringLiteral Nothing (mkString (properToJs ctor)))]
+    return $ AST.ArrayLiteral Nothing [AST.StringLiteral Nothing (mkString (properToJs ctor))]
   valueToJs' (Constructor _ _ ctor fields) =
     let constructor =
-          let body = AST.ObjectLiteral Nothing
-               ([("tag", AST.StringLiteral Nothing (mkString (properToJs ctor)))] ++ ((\field -> (mkString $ identToJs field, AST.Var Nothing $ identToJs field)) <$> fields))
+          let body = AST.ArrayLiteral Nothing
+               ([AST.StringLiteral Nothing (mkString (properToJs ctor))] ++ ((\field -> AST.Var Nothing $ identToJs field) <$> fields))
           in AST.Function Nothing (Just (properToJs ctor)) (identToJs `map` fields) (AST.Block Nothing [AST.Return Nothing body])
         createFn =
           let body = AST.App Nothing (AST.Var Nothing (properToJs ctor)) (var `map` fields)
@@ -371,22 +371,22 @@ moduleToJs (Module _ coms mn _ imps exps foreigns decls) foreign_ =
     return (AST.VariableIntroduction Nothing (identToJs ident) (Just (AST.Var Nothing varName)) : done)
   binderToJs' varName done (ConstructorBinder (_, _, _, Just IsNewtype) _ _ [b]) =
     binderToJs varName done b
-  binderToJs' varName done (ConstructorBinder (_, _, _, Just (IsConstructor ctorType fields)) _ (Qualified _ ctor) bs) = do
-    js <- go (zip fields bs) done
+  binderToJs' varName done (ConstructorBinder (_, _, _, Just (IsConstructor ctorType _)) _ (Qualified _ ctor) bs) = do
+    js <- go 1 bs done
     return $ case ctorType of
       ProductType -> js
       SumType ->
-        [AST.IfElse Nothing (AST.Binary Nothing AST.EqualTo (accessorString (mkString "tag") $ AST.Var Nothing varName) (AST.StringLiteral Nothing $ mkString $ properToJs ctor))
+        [AST.IfElse Nothing (AST.Binary Nothing AST.EqualTo (AST.Indexer Nothing (AST.NumericLiteral Nothing (Left 0)) $ AST.Var Nothing varName) (AST.StringLiteral Nothing $ mkString $ properToJs ctor))
                   (AST.Block Nothing js)
                   Nothing]
     where
-    go :: [(Ident, Binder Ann)] -> [AST] -> m [AST]
-    go [] done' = return done'
-    go ((field, binder) : remain) done' = do
+    go :: Integer -> [Binder Ann] -> [AST] -> m [AST]
+    go _ [] done' = return done'
+    go n (binder : remain) done' = do
       argVar <- freshName
-      done'' <- go remain done'
+      done'' <- go (n + 1) remain done'
       js <- binderToJs argVar done'' binder
-      return (AST.VariableIntroduction Nothing argVar (Just $ accessorString (mkString $ identToJs field) $ AST.Var Nothing varName) : js)
+      return (AST.VariableIntroduction Nothing argVar (Just $ AST.Indexer Nothing (AST.NumericLiteral Nothing (Left n)) $ AST.Var Nothing varName) : js)
   binderToJs' _ _ ConstructorBinder{} =
     internalError "binderToJs: Invalid ConstructorBinder in binderToJs"
   binderToJs' varName done (NamedBinder _ ident binder) = do
