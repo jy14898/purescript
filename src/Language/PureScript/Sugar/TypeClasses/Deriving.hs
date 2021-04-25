@@ -36,7 +36,7 @@ import           Language.PureScript.TypeChecker.Synonyms (SynonymMap, KindMap, 
 -- instances were derived in the same way. This data structure is used to ensure
 -- this property.
 data NewtypeDerivedInstances = NewtypeDerivedInstances
-  { ndiClasses :: M.Map (ModuleName, ProperName 'ClassName) ([Text], [SourceConstraint], [FunctionalDependency])
+  { ndiClasses :: M.Map (ModuleName, ProperName 'ClassName) ([Text], [SourceConstraint], [(Maybe (ProperName 'TypeName), FunctionalDependency)])
   -- ^ A list of superclass constraints for each type class. Since type classes
   -- have not been desugared here, we need to track this.
   , ndiDerivedInstances :: S.Set ((ModuleName, ProperName 'ClassName), (ModuleName, ProperName 'TypeName))
@@ -240,7 +240,7 @@ deriveNewtypeInstance ss mn syns kinds ndis className ds tys tyConNm dargs = do
               -- Everything else raises a UnverifiableSuperclassInstance warning.
               -- This covers pretty much all cases we're interested in, but later we might want to do
               -- more work to extend this to other superclass relationships.
-              let determined = map (srcTypeVar . (args !!)) . ordNub . concatMap fdDetermined . filter ((== [length args - 1]) . fdDeterminers) $ deps
+              let determined = map (srcTypeVar . (args !!)) . ordNub . concatMap fdDetermined . filter ((== [length args - 1]) . fdDeterminers) $ snd <$> deps
               if eqType (last constraintArgs) (srcTypeVar (last args)) && all (`elem` determined) (init constraintArgs)
                 then do
                   -- Now make sure that a superclass instance was derived. Again, this is not a complete

@@ -12,7 +12,7 @@ import Control.Monad.Error.Class (MonadError(..))
 import Data.Function (on)
 import Data.Foldable (traverse_)
 import Data.List (intersect, groupBy, sortBy)
-import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Maybe (fromMaybe, mapMaybe, isJust)
 import qualified Data.Map as M
 
 import Language.PureScript.AST
@@ -39,12 +39,17 @@ findExportable (Module _ _ mn ds _) =
     }
 
   updateExports :: Exports -> Declaration -> m Exports
-  updateExports exps (TypeClassDeclaration (ss, _) tcn _ _ _ ds') = do
+  updateExports exps (TypeClassDeclaration (ss, _) tcn _ _ fundeps ds') = do
     exps' <- rethrowWithPosition ss $ exportTypeClass ss Internal exps tcn source
-    foldM go exps' ds'
+    exps'' <- foldM go exps' ds'
+    foldM go2 exps'' (filter (isJust . fst) fundeps)
     where
     go exps'' (TypeDeclaration (TypeDeclarationData (ss', _) name _)) = exportValue ss' exps'' name source
     go _ _ = internalError "Invalid declaration in TypeClassDeclaration"
+
+    go2 exps'' (Just name, _) = exportType ss Internal exps'' name [] source
+    go2 _ _ = internalError "internal error"
+
   updateExports exps (DataDeclaration (ss, _) _ tn _ dcs) =
     exportType ss Internal exps tn (map dataCtorName dcs) source
   updateExports exps (TypeSynonymDeclaration (ss, _) tn _ _) =

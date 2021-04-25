@@ -395,7 +395,7 @@ renameInModule imports (Module modSS coms mn decls exps) =
 
       -- If neither of the above cases are true then it's an undefined or
       -- unimported symbol.
-      _ -> throwUnknown
+      _ -> internalError (show $ fmap toName $ qname) -- throwUnknown
 
     where
     throwUnknown = throwError . errorMessage . UnknownName . fmap toName $ qname

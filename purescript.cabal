@@ -313,6 +313,7 @@ library
     Language.PureScript.TypeChecker.Skolems
     Language.PureScript.TypeChecker.Subsumption
     Language.PureScript.TypeChecker.Synonyms
+    Language.PureScript.TypeChecker.NamedFundeps
     Language.PureScript.TypeChecker.Types
     Language.PureScript.TypeChecker.TypeSearch
     Language.PureScript.TypeChecker.Unify

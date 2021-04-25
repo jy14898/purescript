@@ -43,6 +43,7 @@ import Language.PureScript.TypeChecker.Kinds hiding (kindOf)
 import Language.PureScript.TypeChecker.Monad
 import Language.PureScript.TypeChecker.Roles
 import Language.PureScript.TypeChecker.Synonyms
+import Language.PureScript.TypeChecker.NamedFundeps
 import Language.PureScript.TypeChecker.Unify
 import Language.PureScript.Roles
 import Language.PureScript.Types
@@ -276,7 +277,7 @@ unify
   => (SourceType, SourceType)
   -> m (SourceType, SourceType, SourceType)
 unify (a, b) = do
-  let kindOf = sequence . (id &&& elaborateKind) <=< replaceAllTypeSynonyms
+  let kindOf = sequence . (id &&& elaborateKind) <=< replaceAllTypeSynonyms <=< replaceAllNamedFundeps
   (a', kind) <- kindOf a
   (b', kind') <- kindOf b
   unifyKinds' kind kind'

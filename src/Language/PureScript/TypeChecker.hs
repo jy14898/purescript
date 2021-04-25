@@ -12,7 +12,7 @@ module Language.PureScript.TypeChecker
 import Prelude.Compat
 import Protolude (headMay, ordNub)
 
-import Control.Monad (when, unless, void, forM,)
+import Control.Monad (when, unless, void, forM, guard, (<=<))
 import Control.Monad.Error.Class (MonadError(..))
 import Control.Monad.State.Class (MonadState(..), modify, gets)
 import Control.Monad.Supply.Class (MonadSupply)
@@ -42,6 +42,7 @@ import Language.PureScript.TypeChecker.Kinds as T
 import Language.PureScript.TypeChecker.Monad as T
 import Language.PureScript.TypeChecker.Roles as T
 import Language.PureScript.TypeChecker.Synonyms as T
+import Language.PureScript.TypeChecker.NamedFundeps as T hiding (KindMap)
 import Language.PureScript.TypeChecker.Types as T
 import Language.PureScript.TypeChecker.Unify (varIfUnknown)
 import Language.PureScript.TypeClassDictionaries
@@ -139,6 +140,19 @@ addValue moduleName name ty nameKind = do
   env <- getEnv
   putEnv (env { names = M.insert (Qualified (Just moduleName) name) (ty, nameKind, Defined) (names env) })
 
+-- TODO Insert kind decl into types?
+--      Or remove KindFundep from TypeKinds and find some other way to do this
+--
+--      Ah. hasSig is looking for the kind already applied, so the kind param here is an inferred one?
+--      It comes from kindOfClass
+--      should we make kindOfFunctionalDependency?
+--      it looks like they defer the calc to kindsOfAll where they supply just the single declaration
+--      So we should probably modify that?
+--
+--      I can't use the dictionary types as an example, because they would just copy the class kind directly but change the output from constraint to the dict
+--      Maybe I should just do it a dumb way first? Pluck out the types and delete unused foralls?
+--
+--      Perhaps add fundep kinds to ClassDeclarationResult?
 addTypeClass
   :: forall m
    . (MonadState CheckState m, MonadError MultipleErrors m, MonadWriter MultipleErrors m)
@@ -146,11 +160,12 @@ addTypeClass
   -> Qualified (ProperName 'ClassName)
   -> [(Text, Maybe SourceType)]
   -> [SourceConstraint]
-  -> [FunctionalDependency]
+  -> [(Maybe (ProperName 'TypeName), FunctionalDependency)]
+  -> [(ProperName 'TypeName, SourceType)]
   -> [Declaration]
   -> SourceType
   -> m ()
-addTypeClass _ qualifiedClassName args implies dependencies ds kind = do
+addTypeClass mn qualifiedClassName args implies dependencies nameddependencykinds ds kind = do
   env <- getEnv
   newClass <- mkNewClass
   let qualName = fmap coerceProperName qualifiedClassName
@@ -158,7 +173,8 @@ addTypeClass _ qualifiedClassName args implies dependencies ds kind = do
   unless (hasSig || not (containsForAll kind)) $ do
     tell . errorMessage $ MissingKindDeclaration ClassSig (disqualify qualName) kind
   traverse_ (checkMemberIsUsable newClass (typeSynonyms env) (types env)) classMembers
-  putEnv $ env { types = M.insert qualName (kind, ExternData (nominalRolesForKind kind)) (types env)
+  let ndk = M.fromList ((\(nm, k) -> (mkQualified nm mn, (k, NamedFundep))) <$> nameddependencykinds)
+  putEnv $ env { types = M.insert qualName (kind, ExternData (nominalRolesForKind kind)) (M.union ndk (types env))
                , typeClasses = M.insert qualifiedClassName newClass (typeClasses env) }
   where
     classMembers :: [(Ident, SourceType)]
@@ -167,7 +183,7 @@ addTypeClass _ qualifiedClassName args implies dependencies ds kind = do
     mkNewClass :: m TypeClassData
     mkNewClass = do
       env <- getEnv
-      implies' <- (traverse . overConstraintArgs . traverse) replaceAllTypeSynonyms implies
+      implies' <- (traverse . overConstraintArgs . traverse) (replaceAllTypeSynonyms <=< replaceAllNamedFundeps) implies
       let ctIsEmpty = null classMembers && all (typeClassIsEmpty . findSuperClass env) implies'
       pure $ makeTypeClassData args classMembers implies' dependencies ctIsEmpty
       where
@@ -248,7 +264,7 @@ checkTypeSynonyms
   :: (MonadState CheckState m, MonadError MultipleErrors m)
   => SourceType
   -> m ()
-checkTypeSynonyms = void . replaceAllTypeSynonyms
+checkTypeSynonyms = void . (replaceAllTypeSynonyms <=< replaceAllNamedFundeps)
 
 -- |
 -- Type check all declarations in a module
@@ -296,7 +312,13 @@ typeCheckAll moduleName _ = traverse go
         sss = fmap declSourceSpan tys
     warnAndRethrow (addHint (ErrorInDataBindingGroup bindingGroupNames) . addHint (PositionedError sss)) $ do
       env <- getEnv
-      (syn_ks, data_ks, cls_ks) <- kindsOfAll moduleName syns (fmap snd dataDecls) (fmap snd clss)
+      (syn_ks, data_ks, cls_ks) <- kindsOfAll moduleName syns (fmap snd dataDecls) $ do
+        (deps, (sa, nm, args, implies, decls)) <- clss
+        let deps' = do
+              (dnm, dep) <- deps
+              guard (isJust dnm)
+              pure (fromJust dnm, dep)
+        pure (sa, nm, args, implies, decls, deps')
       for_ (zip syns syn_ks) $ \((_, name, args, _), (elabTy, kind)) -> do
         checkDuplicateTypeArguments $ map fst args
         let args' = args `withKinds` kind
@@ -312,11 +334,11 @@ typeCheckAll moduleName _ = traverse go
         roles <- checkRoles' name args'
         let args'' = args' `withRoles` roles
         addDataType moduleName dtype name args'' dataCtors ctorKind
-      for_ (zip clss cls_ks) $ \((deps, (sa, pn, _, _, _)), (args', implies', tys', kind)) -> do
+      for_ (zip clss cls_ks) $ \((deps, (sa, pn, _, _, _)), (args', implies', tys', nameddeps', kind)) -> do
         let qualifiedClassName = Qualified (Just moduleName) pn
         guardWith (errorMessage (DuplicateTypeClass pn (fst sa))) $
           not (M.member qualifiedClassName (typeClasses env))
-        addTypeClass moduleName qualifiedClassName (fmap Just <$> args') implies' deps tys' kind
+        addTypeClass moduleName qualifiedClassName (fmap Just <$> args') implies' deps nameddeps' tys' kind
     return d
     where
     toTypeSynonym (TypeSynonymDeclaration sa nm args ty) = Just (sa, nm, args, ty)
@@ -397,8 +419,11 @@ typeCheckAll moduleName _ = traverse go
       let qualifiedClassName = Qualified (Just moduleName) pn
       guardWith (errorMessage (DuplicateTypeClass pn ss)) $
         not (M.member qualifiedClassName (typeClasses env))
-      (args', implies', tys', kind) <- kindOfClass moduleName (sa, pn, args, implies, tys)
-      addTypeClass moduleName qualifiedClassName (fmap Just <$> args') implies' deps tys' kind
+      (args', implies', tys', nameddeps', kind) <- kindOfClass moduleName (sa, pn, args, implies, tys, do
+              (dnm, dep) <- deps
+              guard (isJust dnm)
+              pure (fromJust dnm, dep))
+      addTypeClass moduleName qualifiedClassName (fmap Just <$> args') implies' deps nameddeps' tys' kind
       return d
   go (d@(TypeInstanceDeclaration sa@(ss, _) ch idx dictName deps className tys body)) =
     rethrow (addHint (ErrorInInstance className tys) . addHint (positionedError ss)) $ do
@@ -412,14 +437,14 @@ typeCheckAll moduleName _ = traverse go
         Just typeClass -> do
           checkInstanceArity dictName className typeClass tys
           (deps', kinds', tys', vars) <- withFreshSubstitution $ checkInstanceDeclaration moduleName (sa, deps, className, tys)
-          tys'' <- traverse replaceAllTypeSynonyms tys'
+          tys'' <- traverse (replaceAllTypeSynonyms <=< replaceAllNamedFundeps) tys'
           sequence_ (zipWith (checkTypeClassInstance typeClass) [0..] tys'')
           let nonOrphanModules = findNonOrphanModules className typeClass tys''
           checkOrphanInstance dictName className tys'' nonOrphanModules
           let qualifiedChain = Qualified (Just moduleName) <$> ch
           checkOverlappingInstance qualifiedChain dictName className typeClass tys'' nonOrphanModules
           _ <- traverseTypeInstanceBody checkInstanceMembers body
-          deps'' <- (traverse . overConstraintArgs . traverse) replaceAllTypeSynonyms deps'
+          deps'' <- (traverse . overConstraintArgs . traverse) (replaceAllTypeSynonyms <=< replaceAllNamedFundeps) deps'
           let dict = TypeClassDictionaryInScope qualifiedChain idx qualifiedDictName [] className vars kinds' tys'' (Just deps'')
           addTypeClassDictionaries (Just moduleName) . M.singleton className $ M.singleton (tcdValue dict) (pure dict)
           return d
@@ -575,7 +600,7 @@ typeCheckAll moduleName _ = traverse go
 
   replaceTypeSynonymsInDataConstructor :: DataConstructorDeclaration -> m DataConstructorDeclaration
   replaceTypeSynonymsInDataConstructor DataConstructorDeclaration{..} = do
-    dataCtorFields' <- traverse (traverse replaceAllTypeSynonyms) dataCtorFields
+    dataCtorFields' <- traverse (traverse (replaceAllTypeSynonyms <=< replaceAllNamedFundeps)) dataCtorFields
     return DataConstructorDeclaration
       { dataCtorFields = dataCtorFields'
       , ..

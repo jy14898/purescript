@@ -266,7 +266,7 @@ checkFundeps (ClassHead _ _ _ vars (Just (_, fundeps))) = do
     check a
       | getIdent (nameValue a) `elem` names = pure ()
       | otherwise = addFailure [nameTok a] ErrUnknownFundep
-  for_ fundeps $ \case
+  for_ (snd <$> fundeps) $ \case
     FundepDetermined _ bs -> for_ bs check
     FundepDetermines as _ bs -> do
       for_ as check

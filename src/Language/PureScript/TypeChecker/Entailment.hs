@@ -238,7 +238,7 @@ entails SolverOptions{..} constraint context hints =
                   -- process instances in a chain in index order
                   let found = for chain $ \tcd ->
                                 -- Make sure the type unifies with the type in the type instance definition
-                                case matches typeClassDependencies tcd tys'' of
+                                case matches (snd <$> typeClassDependencies) tcd tys'' of
                                   Apart        -> Right ()                  -- keep searching
                                   Match substs -> Left (Just (substs, tcd)) -- found a match
                                   Unknown      -> Left Nothing              -- can't continue with this chain yet, need proof of apartness
@@ -558,6 +558,11 @@ entails SolverOptions{..} constraint context hints =
         (canMakeProgress, cst) = case rest of
             REmptyKinded _ _ -> (True, Nothing)
             _ -> (not (null fixed), Just [ srcConstraint C.RowLacks kinds [srcTypeLevelString sym, rest] Nothing ])
+
+-- make a version of this which:
+-- only uses one fundep
+--   in reality it's not a full fundep, as there's only 1 determined
+-- accepts a list of types instead of a dictionary
 
 -- Check if an instance matches our list of types, allowing for types
 -- to be solved via functional dependencies. If the types match, we return a

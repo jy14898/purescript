@@ -63,7 +63,7 @@ data TypeClassData = TypeClassData
   , typeClassSuperclasses :: [SourceConstraint]
   -- ^ A list of superclasses of this type class. Type arguments listed above
   -- are considered bound in the types appearing in these constraints.
-  , typeClassDependencies :: [FunctionalDependency]
+  , typeClassDependencies :: [(Maybe (ProperName 'TypeName), FunctionalDependency)]
   -- ^ A list of functional dependencies for the type arguments of this class.
   , typeClassDeterminedArguments :: S.Set Int
   -- ^ A set of indexes of type argument that are fully determined by other
@@ -129,7 +129,7 @@ makeTypeClassData
   :: [(Text, Maybe SourceType)]
   -> [(Ident, SourceType)]
   -> [SourceConstraint]
-  -> [FunctionalDependency]
+  -> [(Maybe (ProperName 'TypeName), FunctionalDependency)]
   -> Bool
   -> TypeClassData
 makeTypeClassData args m s deps tcIsEmpty = TypeClassData args m s deps determinedArgs coveringSets tcIsEmpty
@@ -141,7 +141,7 @@ makeTypeClassData args m s deps tcIsEmpty = TypeClassData args m s deps determin
 
     -- list all the edges in the graph: for each fundep an edge exists for each determiner to each determined
     contributingDeps = M.fromListWith (++) $ identities ++ do
-      fd <- deps
+      (_, fd) <- deps
       src <- fdDeterminers fd
       (src, fdDetermined fd) : map (, []) (fdDetermined fd)
 
@@ -216,6 +216,9 @@ data TypeKind
   -- ^ A local type variable
   | ScopedTypeVar
   -- ^ A scoped type variable
+  | NamedFundep
+  -- ^ Named functional dependency
+  -- Classes use ExternData... should I use that too?
   deriving (Show, Eq, Generic)
 
 instance NFData TypeKind
@@ -501,18 +504,20 @@ primRowClasses =
         , ("right", Just (kindRow (tyVar "k")))
         , ("union", Just (kindRow (tyVar "k")))
         ] [] []
+        ( map (\v -> (Nothing, v))
         [ FunctionalDependency [0, 1] [2]
         , FunctionalDependency [1, 2] [0]
         , FunctionalDependency [2, 0] [1]
-        ] True)
+        ]) True)
 
     -- class Nub (original :: Row k) (nubbed :: Row k) | original -> nubbed
     , (primSubName C.moduleRow "Nub", makeTypeClassData
         [ ("original", Just (kindRow (tyVar "k")))
         , ("nubbed", Just (kindRow (tyVar "k")))
         ] [] []
+        ( map (\v -> (Nothing, v))
         [ FunctionalDependency [0] [1]
-        ] True)
+        ]) True)
 
     -- class Lacks (label :: Symbol) (row :: Row k)
     , (primSubName C.moduleRow "Lacks", makeTypeClassData
@@ -527,9 +532,10 @@ primRowClasses =
         , ("tail", Just (kindRow (tyVar "k")))
         , ("row", Just (kindRow (tyVar "k")))
         ] [] []
+        ( map (\v -> (Nothing, v))
         [ FunctionalDependency [0, 1, 2] [3]
         , FunctionalDependency [0, 3] [1, 2]
-        ] True)
+        ]) True)
     ]
 
 primRowListClasses :: M.Map (Qualified (ProperName 'ClassName)) TypeClassData
@@ -540,8 +546,9 @@ primRowListClasses =
         [ ("row", Just (kindRow (tyVar "k")))
         , ("list", Just (kindRowList (tyVar "k")))
         ] [] []
+        ( map (\v -> (Nothing, v))
         [ FunctionalDependency [0] [1]
-        ] True)
+        ]) True)
     ]
 
 primSymbolClasses :: M.Map (Qualified (ProperName 'ClassName)) TypeClassData
@@ -553,10 +560,11 @@ primSymbolClasses =
         , ("right", Just kindSymbol)
         , ("appended", Just kindSymbol)
         ] [] []
+        ( map (\v -> (Nothing, v))
         [ FunctionalDependency [0, 1] [2]
         , FunctionalDependency [1, 2] [0]
         , FunctionalDependency [2, 0] [1]
-        ] True)
+        ]) True)
 
     -- class Compare (left :: Symbol) (right :: Symbol) (ordering :: Ordering) | left right -> ordering
     , (primSubName C.moduleSymbol "Compare", makeTypeClassData
@@ -564,8 +572,9 @@ primSymbolClasses =
         , ("right", Just kindSymbol)
         , ("ordering", Just kindOrdering)
         ] [] []
+        ( map (\v -> (Nothing, v))
         [ FunctionalDependency [0, 1] [2]
-        ] True)
+        ]) True)
 
     -- class Cons (head :: Symbol) (tail :: Symbol) (symbol :: Symbol) | head tail -> symbol, symbol -> head tail
     , (primSubName C.moduleSymbol "Cons", makeTypeClassData
@@ -573,9 +582,10 @@ primSymbolClasses =
         , ("tail", Just kindSymbol)
         , ("symbol", Just kindSymbol)
         ] [] []
+        ( map (\v -> (Nothing, v))
         [ FunctionalDependency [0, 1] [2]
         , FunctionalDependency [2] [0, 1]
-        ] True)
+        ]) True)
     ]
 
 primTypeErrorClasses :: M.Map (Qualified (ProperName 'ClassName)) TypeClassData

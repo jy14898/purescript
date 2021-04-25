@@ -59,6 +59,7 @@ import Language.PureScript.TypeChecker.Monad
 import Language.PureScript.TypeChecker.Skolems
 import Language.PureScript.TypeChecker.Subsumption
 import Language.PureScript.TypeChecker.Synonyms
+import Language.PureScript.TypeChecker.NamedFundeps
 import Language.PureScript.TypeChecker.TypeSearch
 import Language.PureScript.TypeChecker.Unify
 import Language.PureScript.Types
@@ -149,7 +150,7 @@ typesOf bindingGroupType moduleName vals = withFreshSubstitution $ do
                 unks `S.isSubsetOf` determined
             -- If all of the determining arguments of a particular fundep are
             -- already determined, add the determined arguments from the fundep
-            tcDep <- tcDeps
+            tcDep <- snd <$> tcDeps
             guard $ all (unknownsDetermined . lookupUnknowns) (fdDeterminers tcDep)
             map (fromMaybe S.empty . lookupUnknowns) (fdDetermined tcDep)
         -- These unknowns can be determined from the body of the inferred
@@ -284,7 +285,7 @@ checkTypedBindingGroupElement
 checkTypedBindingGroupElement mn (ident, (val, args, ty, checkType)) dict = do
   -- We replace type synonyms _after_ kind-checking, since we don't want type
   -- synonym expansion to bring type variables into scope. See #2542.
-  ty' <- introduceSkolemScope <=< replaceAllTypeSynonyms $ ty
+  ty' <- introduceSkolemScope <=< replaceAllTypeSynonyms <=< replaceAllNamedFundeps $ ty
   -- Check the type with the new names in scope
   val' <- if checkType
             then withScopedTypeVars mn args $ bindNames dict $ check val ty'
@@ -405,7 +406,7 @@ infer' (App f arg) = do
   return $ TypedValue' True app ret
 infer' (Var ss var) = do
   checkVisibility var
-  ty <- introduceSkolemScope <=< replaceAllTypeSynonyms <=< replaceTypeWildcards <=< lookupVariable $ var
+  ty <- introduceSkolemScope <=< replaceAllTypeSynonyms <=< replaceAllNamedFundeps <=< replaceTypeWildcards <=< lookupVariable $ var
   case ty of
     ConstrainedType _ con ty' -> do
       dicts <- getTypeClassDictionaries
@@ -416,7 +417,7 @@ infer' v@(Constructor _ c) = do
   env <- getEnv
   case M.lookup c (dataConstructors env) of
     Nothing -> throwError . errorMessage . UnknownName . fmap DctorName $ c
-    Just (_, _, ty, _) -> do (v', ty') <- sndM (introduceSkolemScope <=< replaceAllTypeSynonyms) <=< instantiatePolyTypeWithUnknowns v $ ty
+    Just (_, _, ty, _) -> do (v', ty') <- sndM (introduceSkolemScope <=< replaceAllTypeSynonyms <=< replaceAllNamedFundeps) <=< instantiatePolyTypeWithUnknowns v $ ty
                              return $ TypedValue' True v' ty'
 infer' (Case vals binders) = do
   (vals', ts) <- instantiateForBinders vals binders
@@ -445,7 +446,7 @@ infer' (TypedValue checkType val ty) = do
   moduleName <- unsafeCheckCurrentModule
   ((args, elabTy), kind) <- kindOfWithScopedVars ty
   checkTypeKind ty kind
-  ty' <- introduceSkolemScope <=< replaceAllTypeSynonyms <=< replaceTypeWildcards $ elabTy
+  ty' <- introduceSkolemScope <=< replaceAllTypeSynonyms <=< replaceAllNamedFundeps <=< replaceTypeWildcards $ elabTy
   tv <- if checkType then withScopedTypeVars moduleName args (check val ty') else return (TypedValue' False val ty)
   return $ TypedValue' True (tvToExpr tv) ty'
 infer' (Hole name) = do
@@ -473,7 +474,7 @@ inferLetBinding seen (ValueDecl sa@(ss, _) ident nameKind [] [MkUnguarded (Typed
     ((args, elabTy), kind) <- kindOfWithScopedVars ty
     checkTypeKind ty kind
     let dict = M.singleton (Qualified Nothing ident) (elabTy, nameKind, Undefined)
-    ty' <- introduceSkolemScope <=< replaceAllTypeSynonyms <=< replaceTypeWildcards $ elabTy
+    ty' <- introduceSkolemScope <=< replaceAllTypeSynonyms <=< replaceAllNamedFundeps <=< replaceTypeWildcards $ elabTy
     if checkType
       then withScopedTypeVars moduleName args (bindNames dict (check val ty'))
       else return (TypedValue' checkType val elabTy)
@@ -517,7 +518,7 @@ inferBinder val (ConstructorBinder ss ctor binders) = do
   case M.lookup ctor (dataConstructors env) of
     Just (_, _, ty, _) -> do
       (_, fn) <- instantiatePolyTypeWithUnknowns (internalError "Data constructor types cannot contain constraints") ty
-      fn' <- introduceSkolemScope <=< replaceAllTypeSynonyms $ fn
+      fn' <- introduceSkolemScope <=< replaceAllTypeSynonyms <=< replaceAllNamedFundeps $ fn
       let (args, ret) = peelArgs fn'
           expected = length args
           actual = length binders
@@ -559,7 +560,7 @@ inferBinder val (PositionedBinder pos _ binder) =
 inferBinder val (TypedBinder ty binder) = do
   (elabTy, kind) <- kindOf ty
   checkTypeKind ty kind
-  ty1 <- introduceSkolemScope <=< replaceAllTypeSynonyms <=< replaceTypeWildcards $ elabTy
+  ty1 <- introduceSkolemScope <=< replaceAllTypeSynonyms <=< replaceAllNamedFundeps <=< replaceTypeWildcards $ elabTy
   unifyTypes val ty1
   inferBinder ty1 binder
 inferBinder _ OpBinder{} =
@@ -710,8 +711,8 @@ check' (App f arg) ret = do
   return $ TypedValue' True (elaborate app) ret
 check' v@(Var _ var) ty = do
   checkVisibility var
-  repl <- introduceSkolemScope <=< replaceAllTypeSynonyms <=< lookupVariable $ var
-  ty' <- introduceSkolemScope <=< replaceAllTypeSynonyms <=< replaceTypeWildcards $ ty
+  repl <- introduceSkolemScope <=< replaceAllTypeSynonyms <=< replaceAllNamedFundeps <=< lookupVariable $ var
+  ty' <- introduceSkolemScope <=< replaceAllTypeSynonyms <=< replaceAllNamedFundeps <=< replaceTypeWildcards $ ty
   elaborate <- subsumes repl ty'
   return $ TypedValue' True (elaborate v) ty'
 check' (DeferredDictionary className tys) ty = do
@@ -732,8 +733,8 @@ check' (TypedValue checkType val ty1) ty2 = do
   (elabTy2, kind2) <- kindOf ty2
   unifyKinds' kind1 kind2
   checkTypeKind ty1 kind1
-  ty1' <- introduceSkolemScope <=< replaceAllTypeSynonyms <=< replaceTypeWildcards $ elabTy1
-  ty2' <- introduceSkolemScope <=< replaceAllTypeSynonyms <=< replaceTypeWildcards $ elabTy2
+  ty1' <- introduceSkolemScope <=< replaceAllTypeSynonyms <=< replaceAllNamedFundeps <=< replaceTypeWildcards $ elabTy1
+  ty2' <- introduceSkolemScope <=< replaceAllTypeSynonyms <=< replaceAllNamedFundeps <=< replaceTypeWildcards $ elabTy2
   elaborate <- subsumes ty1' ty2'
   val' <- if checkType
             then tvToExpr <$> check val ty1'
@@ -774,7 +775,7 @@ check' v@(Constructor _ c) ty = do
   case M.lookup c (dataConstructors env) of
     Nothing -> throwError . errorMessage . UnknownName . fmap DctorName $ c
     Just (_, _, ty1, _) -> do
-      repl <- introduceSkolemScope <=< replaceAllTypeSynonyms $ ty1
+      repl <- introduceSkolemScope <=< replaceAllTypeSynonyms <=< replaceAllNamedFundeps $ ty1
       ty' <- introduceSkolemScope ty
       elaborate <- subsumes repl ty'
       return $ TypedValue' True (elaborate v) ty'

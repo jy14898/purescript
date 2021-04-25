@@ -453,8 +453,8 @@ convertDeclaration fileName decl = case decl of
       goTyVar (TypeVarName a) = nameValue a
       vars' = zip (toList $ goTyVar <$> vars) [0..]
       goName = fromJust . flip lookup vars' . nameValue
-      goFundep (FundepDetermined _ bs) = Env.FunctionalDependency [] (goName <$> NE.toList bs)
-      goFundep (FundepDetermines as _ bs) = Env.FunctionalDependency (goName <$> NE.toList as) (goName <$> NE.toList bs)
+      goFundep (nm, (FundepDetermined _ bs)) = (nameValue <$> nm, Env.FunctionalDependency [] (goName <$> NE.toList bs))
+      goFundep (nm, (FundepDetermines as _ bs)) = (nameValue <$> nm, Env.FunctionalDependency (goName <$> NE.toList as) (goName <$> NE.toList bs))
       goSig (Labeled n _ ty) = do
         let
           ty' = convertType fileName ty

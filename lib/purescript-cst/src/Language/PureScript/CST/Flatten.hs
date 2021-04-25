@@ -32,7 +32,7 @@ flattenClassHead (ClassHead a b c d e) =
   foldMap (\(f, g) -> flattenOneOrDelimited flattenConstraint f <> pure g) b <>
   flattenName c <>
   foldMap flattenTypeVarBinding d <>
-  foldMap (\(f, g) -> pure f <> flattenSeparated flattenClassFundep g) e
+  foldMap (\(f, g) -> pure f <> flattenSeparated (\(h, i) -> maybe mempty flattenName h <> flattenClassFundep i) g) e
 
 flattenClassFundep :: ClassFundep -> DList SourceToken
 flattenClassFundep = \case

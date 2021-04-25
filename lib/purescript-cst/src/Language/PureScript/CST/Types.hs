@@ -251,7 +251,7 @@ data ClassHead a = ClassHead
   , clsSuper :: Maybe (OneOrDelimited (Constraint a), SourceToken)
   , clsName :: Name (N.ProperName 'N.ClassName)
   , clsVars :: [TypeVarBinding a]
-  , clsFundeps :: Maybe (SourceToken, Separated ClassFundep)
+  , clsFundeps :: Maybe (SourceToken, Separated (Maybe (Name (N.ProperName 'N.TypeName)), ClassFundep))
   } deriving (Show, Eq, Ord, Functor, Foldable, Traversable, Generic)
 
 data ClassFundep

@@ -721,14 +721,18 @@ classSignature :: { Labeled (Name (N.ProperName 'N.TypeName)) (Type ()) }
 classSuper :: { (OneOrDelimited (Constraint ()), SourceToken) }
   : constraints '<=' {%^ revert $ pure ($1, $2) }
 
-classNameAndFundeps :: { (Name (N.ProperName 'N.ClassName), [TypeVarBinding ()], Maybe (SourceToken, Separated ClassFundep)) }
+classNameAndFundeps :: { (Name (N.ProperName 'N.ClassName), [TypeVarBinding ()], Maybe (SourceToken, Separated (Maybe (Name (N.ProperName 'N.TypeName)), ClassFundep))) }
   : properName manyOrEmpty(typeVarBinding) fundeps {%^ revert $ pure (getProperName $1, $2, $3) }
 
-fundeps :: { Maybe (SourceToken, Separated ClassFundep) }
+fundeps :: { Maybe (SourceToken, Separated (Maybe (Name (N.ProperName 'N.TypeName)), ClassFundep)) }
   : {- empty -} { Nothing }
   | '|' sep(fundep, ',') { Just ($1, $2) }
 
-fundep :: { ClassFundep }
+fundep :: { (Maybe (Name (N.ProperName 'N.TypeName)), ClassFundep) }
+  : properName fundep1 { (Just (getProperName $1), $2) }
+  | fundep1 { (Nothing, $1) }
+
+fundep1 :: { ClassFundep }
   : '->' many(ident) { FundepDetermined $1 $2 }
   | many(ident) '->' many(ident) { FundepDetermines $1 $2 $3 }
 

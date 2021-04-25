@@ -139,7 +139,7 @@ data ExternsDeclaration =
       , edClassTypeArguments      :: [(Text, Maybe SourceType)]
       , edClassMembers            :: [(Ident, SourceType)]
       , edClassConstraints        :: [SourceConstraint]
-      , edFunctionalDependencies  :: [FunctionalDependency]
+      , edFunctionalDependencies  :: [(Maybe (ProperName 'TypeName), FunctionalDependency)]
       , edIsEmpty                 :: Bool
       }
   -- | An instance declaration
@@ -225,6 +225,8 @@ moduleToExternsFile (Module ss _ mn ds (Just exps)) env = ExternsFile{..}
       Nothing -> internalError "toExternsDeclaration: no kind in toExternsDeclaration"
       Just (kind, TypeSynonym)
         | Just (args, synTy) <- Qualified (Just mn) pn `M.lookup` typeSynonyms env -> [ EDType pn kind TypeSynonym, EDTypeSynonym pn args synTy ]
+      -- TODO don't do this
+      Just (kind, NamedFundep) -> [ EDType pn kind (ExternData []) ]
       Just (kind, ExternData rs) -> [ EDType pn kind (ExternData rs) ]
       Just (kind, tk@(DataType _ _ tys)) ->
         EDType pn kind tk : [ EDDataConstructor dctor dty pn ty args

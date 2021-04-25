@@ -21,6 +21,7 @@ import           Language.PureScript.Names                   as P
 import           Language.PureScript.Pretty.Types            as P
 import           Language.PureScript.TypeChecker.Skolems     as Skolem
 import           Language.PureScript.TypeChecker.Synonyms    as P
+import           Language.PureScript.TypeChecker.NamedFundeps as P
 import           Language.PureScript.Types                   as P
 
 checkInEnvironment
@@ -54,6 +55,7 @@ checkSubsume unsolved env st userT envT = checkInEnvironment env st $ do
   let initializeSkolems =
         Skolem.introduceSkolemScope
         <=< P.replaceAllTypeSynonyms
+        <=< P.replaceAllNamedFundeps
         <=< P.replaceTypeWildcards
 
   userT' <- initializeSkolems userT
@@ -89,6 +91,7 @@ accessorSearch unsolved env st userT = maybe ([], []) fst $ checkInEnvironment e
   let initializeSkolems =
         Skolem.introduceSkolemScope
         <=< P.replaceAllTypeSynonyms
+        <=< P.replaceAllNamedFundeps
         <=< P.replaceTypeWildcards
 
   userT' <- initializeSkolems userT

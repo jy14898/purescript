@@ -38,6 +38,7 @@ import Data.Bitraversable (bitraverse)
 import Data.Foldable (for_, traverse_)
 import Data.Function (on)
 import Data.Functor (($>))
+import Data.Bifunctor (second)
 import qualified Data.IntSet as IS
 import Data.List (nubBy, sortBy, (\\))
 import qualified Data.Map as M
@@ -54,6 +55,7 @@ import Language.PureScript.Names
 import Language.PureScript.TypeChecker.Monad
 import Language.PureScript.TypeChecker.Skolems (newSkolemConstant, newSkolemScope, skolemize)
 import Language.PureScript.TypeChecker.Synonyms
+import Language.PureScript.TypeChecker.NamedFundeps
 import Language.PureScript.Types
 import Language.PureScript.Pretty.Types
 import Lens.Micro.Platform ((^.), _1, _2, _3)
@@ -220,14 +222,14 @@ inferKind = \tyToInfer ->
         _ ->
           internalError $ "inferKind: unkinded forall binder"
     KindedType _ t1 t2 -> do
-      t2' <- replaceAllTypeSynonyms . fst =<< go t2
+      t2' <- (replaceAllTypeSynonyms <=< replaceAllNamedFundeps) . fst =<< go t2
       t1' <- checkKind t1 t2'
       t2'' <- apply t2'
       pure (t1', t2'')
     ForAll ann arg mbKind ty sc -> do
       moduleName <- unsafeCheckCurrentModule
       kind <- case mbKind of
-        Just k -> replaceAllTypeSynonyms =<< checkKind k E.kindType
+        Just k -> (replaceAllTypeSynonyms <=< replaceAllNamedFundeps) =<< checkKind k E.kindType
         Nothing -> freshKind (fst ann)
       (ty', unks) <- bindLocalTypeVariables moduleName [(ProperName arg, kind)] $ do
         ty' <- apply =<< checkKind ty E.kindType
@@ -576,7 +578,7 @@ kindOfWithScopedVars
   => SourceType
   -> m (([(Text, SourceType)], SourceType), SourceType)
 kindOfWithScopedVars ty = do
-  (ty', kind) <- bitraverse apply (replaceAllTypeSynonyms <=< apply) =<< inferKind ty
+  (ty', kind) <- bitraverse apply ((replaceAllTypeSynonyms <=< replaceAllNamedFundeps) <=< apply) =<< inferKind ty
   let binders = fst . fromJust $ completeBinderList ty'
   pure ((snd <$> binders, ty'), kind)
 
@@ -611,7 +613,7 @@ inferDataDeclaration moduleName (ann, tyName, tyArgs, ctors) = do
   tyKind <- apply =<< lookupTypeVariable moduleName (Qualified Nothing tyName)
   let (sigBinders, tyKind') = fromJust . completeBinderList $ tyKind
   bindLocalTypeVariables moduleName (first ProperName . snd <$> sigBinders) $ do
-    tyArgs' <- for tyArgs . traverse . maybe (freshKind (fst ann)) $ replaceAllTypeSynonyms <=< apply <=< flip checkKind E.kindType
+    tyArgs' <- for tyArgs . traverse . maybe (freshKind (fst ann)) $ (replaceAllTypeSynonyms <=< replaceAllNamedFundeps) <=< apply <=< flip checkKind E.kindType
     subsumesKind (foldr ((E.-:>) . snd) E.kindType tyArgs') tyKind'
     bindLocalTypeVariables moduleName (first ProperName <$> tyArgs') $ do
       let tyCtorName = srcTypeConstructor $ mkQualified tyName moduleName
@@ -663,7 +665,7 @@ inferTypeSynonym moduleName (ann, tyName, tyArgs, tyBody) = do
   let (sigBinders, tyKind') = fromJust . completeBinderList $ tyKind
   bindLocalTypeVariables moduleName (first ProperName . snd <$> sigBinders) $ do
     kindRes <- freshKind (fst ann)
-    tyArgs' <- for tyArgs . traverse . maybe (freshKind (fst ann)) $ replaceAllTypeSynonyms <=< apply <=< flip checkKind E.kindType
+    tyArgs' <- for tyArgs . traverse . maybe (freshKind (fst ann)) $ (replaceAllTypeSynonyms <=< replaceAllNamedFundeps) <=< apply <=< flip checkKind E.kindType
     unifyKinds tyKind' $ foldr ((E.-:>) . snd) kindRes tyArgs'
     bindLocalTypeVariables moduleName (first ProperName <$> tyArgs') $ do
       tyBodyAndKind <- inferKind tyBody
@@ -749,6 +751,7 @@ type ClassDeclarationArgs =
   , [(Text, Maybe SourceType)]
   , [SourceConstraint]
   , [Declaration]
+  , [(ProperName 'TypeName, E.FunctionalDependency)]
   )
 
 type ClassDeclarationResult =
@@ -758,6 +761,8 @@ type ClassDeclarationResult =
   -- ^ The kind annotated superclass constraints
   , [Declaration]
   -- ^ The kind annotated declarations
+  , [(ProperName 'TypeName, SourceType)]
+  -- ^ The inferred kind of the functional dependencies
   , SourceType
   -- ^ The inferred kind of the declaration
   )
@@ -774,17 +779,24 @@ inferClassDeclaration
   :: forall m. (MonadError MultipleErrors m, MonadState CheckState m)
   => ModuleName
   -> ClassDeclarationArgs
-  -> m ([(Text, SourceType)], [SourceConstraint], [Declaration])
-inferClassDeclaration moduleName (ann, clsName, clsArgs, superClasses, decls) = do
+  -> m ([(Text, SourceType)], [SourceConstraint], [Declaration], [(ProperName 'TypeName, SourceType)])
+inferClassDeclaration moduleName (ann, clsName, clsArgs, superClasses, decls, fundeps) = do
   clsKind <- apply =<< lookupTypeVariable moduleName (Qualified Nothing $ coerceProperName clsName)
   let (sigBinders, clsKind') = fromJust . completeBinderList $ clsKind
   bindLocalTypeVariables moduleName (first ProperName . snd <$> sigBinders) $ do
-    clsArgs' <- for clsArgs . traverse . maybe (freshKind (fst ann)) $ replaceAllTypeSynonyms <=< apply <=< flip checkKind E.kindType
+    clsArgs' <- for clsArgs . traverse . maybe (freshKind (fst ann)) $ (replaceAllTypeSynonyms <=< replaceAllNamedFundeps) <=< apply <=< flip checkKind E.kindType
     unifyKinds clsKind' $ foldr ((E.-:>) . snd) E.kindConstraint clsArgs'
+    -- TODO We don't want to check unnamed ones
+    let asdf (nm, (E.FunctionalDependency ins [out])) = (nm, foldr (E.-:>) (snd $ clsArgs' !! out) (snd . (!!) clsArgs' <$> ins))
+        asdf _ = internalError "Bad functional dependency"
     bindLocalTypeVariables moduleName (first ProperName <$> clsArgs') $ do
-      (clsArgs',,)
+      (clsArgs',,,asdf <$> fundeps)
         <$> for superClasses checkConstraint
         <*> for decls checkClassMemberDeclaration
+
+-- TODO Add a check and apply for the fundeps??
+-- E.kindType -:> E.kindType ???
+
 
 checkClassMemberDeclaration
   :: forall m. (MonadError MultipleErrors m, MonadState CheckState m)
@@ -872,7 +884,7 @@ checkKindDeclaration
 checkKindDeclaration _ ty = do
   (ty', kind) <- kindOf ty
   checkTypeKind kind E.kindType
-  ty'' <- replaceAllTypeSynonyms ty'
+  ty'' <- (replaceAllTypeSynonyms <=< replaceAllNamedFundeps) ty'
   unks <- unknownsWithKinds . IS.toList $ unknowns ty''
   finalTy <- generalizeUnknowns unks <$> freshenForAlls ty' ty''
   checkQuantification finalTy
@@ -921,7 +933,7 @@ kindsOfAll
 kindsOfAll moduleName syns dats clss = withFreshSubstitution $ do
   synDict <- for syns $ \(sa, synName, _, _) -> fmap (synName,) $ existingSignatureOrFreshKind moduleName (fst sa) synName
   datDict <- for dats $ \(sa, datName, _, _) -> fmap (datName,) $ existingSignatureOrFreshKind moduleName (fst sa) datName
-  clsDict <- for clss $ \(sa, clsName, _, _, _) -> fmap (coerceProperName clsName,) $ existingSignatureOrFreshKind moduleName (fst sa) $ coerceProperName clsName
+  clsDict <- for clss $ \(sa, clsName, _, _, _, _) -> fmap (coerceProperName clsName,) $ existingSignatureOrFreshKind moduleName (fst sa) $ coerceProperName clsName
   let bindingGroup = synDict <> datDict <> clsDict
   bindLocalTypeVariables moduleName bindingGroup $ do
     synResults <- for syns (inferTypeSynonym moduleName)
@@ -935,12 +947,15 @@ kindsOfAll moduleName syns dats clss = withFreshSubstitution $ do
       datKind' <- apply datKind
       ctors' <- traverse (bitraverse (traverseDataCtorFields (traverse (traverse apply))) apply) ctors
       pure (((datName, datKind'), ctors'), unknowns datKind')
-    clsResultsWithUnks <- for (zip clsDict clsResults) $ \((clsName, clsKind), (args, supers, decls)) -> do
-      clsKind' <- apply clsKind
+    clsResultsWithUnks <- for (zip clsDict clsResults) $ \((clsName, clsKind), (args, supers, decls, fundeps)) -> do
+      clsKind' <- apply clsKind -- this must be doing much more than I realised? oh it's probably just substituting from inferClassDecl?
       args' <- traverse (traverse apply) args
       supers' <- traverse applyConstraint supers
       decls' <- traverse applyClassMemberDeclaration decls
-      pure (((clsName, clsKind'), (args', supers', decls')), unknowns clsKind')
+      fundeps' <- for fundeps $ \(nm, fd) -> do
+          fd' <- apply fd
+          pure (nm, fd')
+      pure (((clsName, clsKind'), (args', supers', decls', fundeps')), unknowns clsKind')
     let synUnks = fmap (\(((synName, _), _), unks) -> (synName, unks)) synResultsWithUnks
         datUnks = fmap (\(((datName, _), _), unks) -> (datName, unks)) datResultsWithUnks
         clsUnks = fmap (\(((clsName, _), _), unks) -> (clsName, unks)) clsResultsWithUnks
@@ -956,7 +971,7 @@ kindsOfAll moduleName syns dats clss = withFreshSubstitution $ do
           TypeConstructor _ name
             | Just (tyCtor, _) <- lookup name tySubs -> tyCtor
           other -> other
-        clsResultsWithKinds = flip fmap clsResultsWithUnks $ \(((clsName, clsKind), (args, supers, decls)), _) -> do
+        clsResultsWithKinds = flip fmap clsResultsWithUnks $ \(((clsName, clsKind), (args, supers, decls, fundeps)), _) -> do
           let tyUnks = snd . fromJust $ lookup (mkQualified clsName moduleName) tySubs
               (usedTypeVariablesInDecls, _, _, _, _) = accumTypes usedTypeVariables
               usedVars = usedTypeVariables clsKind
@@ -967,7 +982,8 @@ kindsOfAll moduleName syns dats clss = withFreshSubstitution $ do
               args' = fmap (replaceUnknownsWithVars unkBinders . replaceTypeCtors) <$> args
               supers' = mapConstraintArgsAll (fmap (replaceUnknownsWithVars unkBinders . replaceTypeCtors)) <$> supers
               decls' = mapTypeDeclaration (replaceUnknownsWithVars unkBinders . replaceTypeCtors) <$> decls
-          (args', supers', decls', generalizeUnknownsWithVars unkBinders clsKind)
+          -- Is it just a case of constructing the kind from args, and using generalize? Why is classKind not just args?
+          (args', supers', decls', second (generalizeUnknownsWithVars unkBinders) <$> fundeps, generalizeUnknownsWithVars unkBinders clsKind)
     datResultsWithKinds <- for datResultsWithUnks $ \(((datName, datKind), ctors), _) -> do
       let tyUnks = snd . fromJust $ lookup (mkQualified datName moduleName) tySubs
           replaceDataCtorField ty = replaceUnknownsWithVars (unknownVarNames (usedTypeVariables ty) tyUnks) $ replaceTypeCtors ty

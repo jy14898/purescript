@@ -186,9 +186,10 @@ data DeclarationInfo
 
 instance NFData DeclarationInfo
 
-convertFundepsToStrings :: [(Text, Maybe Type')] -> [P.FunctionalDependency] -> [([Text], [Text])]
+-- TODO Don't ignore the names
+convertFundepsToStrings :: [(Text, Maybe Type')] -> [(Maybe (P.ProperName 'P.TypeName), P.FunctionalDependency)] -> [([Text], [Text])]
 convertFundepsToStrings args fundeps =
-  map (\(P.FunctionalDependency from to) -> toArgs from to) fundeps
+  map (\(_, P.FunctionalDependency from to) -> toArgs from to) fundeps
   where
   argsVec = V.fromList (map fst args)
   getArg i =
